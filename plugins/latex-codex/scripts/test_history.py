@@ -1,11 +1,13 @@
 """Run: python test_history.py (stdlib only; no TeX needed)."""
 import json
+import hashlib
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
 import tempfile
 import threading
+import zlib
 from unittest.mock import patch, Mock
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -86,6 +88,58 @@ with tempfile.TemporaryDirectory() as directory:
     assert ids[2] in [row['id'] for row in grouped.list()['revisions']]
     assert grouped.previous(ids[3])['id'] == ids[2], 'Named versions stay visible and become comparison boundaries.'
     assert [row['id'] for row in History(Path(directory) / 'grouped.tex').list()['revisions']] == [row['id'] for row in grouped.list()['revisions']]
+
+
+with tempfile.TemporaryDirectory() as directory:
+    path = Path(directory) / 'main.tex'
+    history = History(path)
+    with patch('history.datetime') as clock:
+        clock.now.return_value = datetime(2026, 10, 1, 12, 1, tzinfo=timezone.utc)
+        duplicate = history.record('Selected text.', 'open')
+        target = history.record('Selected text.', 'save', force=True)
+        displaced = history.record('Newer text.', 'external')
+    assert target not in {row['id'] for row in history.list()['revisions']}, 'The selected save can be grouped away before restoring.'
+    restored = history.record('Selected text.', 'restore', force=True, restored_from=target)
+    history = History(path)
+    rows = {row['id']: row for row in history.list()['revisions']}
+    assert rows[restored]['restored_from'] == target and rows[restored]['kind'] == 'restore'
+    assert rows[target]['is_restore_target'] is True, 'The exact selected version remains visible after grouping and restart.'
+    assert rows[duplicate]['is_restore_target'] is False and rows[displaced]['is_restore_target'] is False, 'Matching text and displaced versions are not restore targets.'
+    again = history.record('Selected text.', 'restore', force=True, restored_from=restored)
+    rows = {row['id']: row for row in history.list()['revisions']}
+    assert rows[restored]['is_restore_target'] is True and rows[again]['restored_from'] == restored
+    other = History(path.with_name('other.tex'))
+    other_id = other.record('Selected text.', 'open')
+    for i in range(105):
+        other.record(str(i), 'open')
+    page = history.list()
+    older = {row['id']: row for row in history.list(page['next'])['revisions']}
+    assert older[target]['is_restore_target'] is True and older[other_id]['is_restore_target'] is False, 'Restore links survive project pagination without marking another file.'
+print('PASS: exact restore targets persist across grouping, repeated restores, identical text, project files and pagination')
+
+
+with tempfile.TemporaryDirectory() as directory:
+    path = Path(directory) / 'legacy.tex'
+    folder = path.parent / '.latex-codex'; folder.mkdir()
+    with closing(sqlite3.connect(folder / 'history.sqlite3')) as db, db:
+        db.execute('CREATE TABLE revisions (id INTEGER PRIMARY KEY, file TEXT NOT NULL, created TEXT NOT NULL, kind TEXT NOT NULL, label TEXT NOT NULL DEFAULT "", digest TEXT NOT NULL, source BLOB NOT NULL)')
+        raw = b'Legacy restored text.'
+        db.execute('INSERT INTO revisions VALUES (1,?,?,?,?,?,?)',
+                   (path.name, '2026-10-01T12:00:00+00:00', 'restore', 'Legacy checkpoint', hashlib.sha256(raw).hexdigest(), zlib.compress(raw)))
+    legacy = History(path)
+    row = legacy.list()['revisions'][0]
+    assert row['kind'] == 'restore' and row['restored_from'] is None and row['is_restore_target'] is False
+    assert legacy.get(1)['source'] == raw.decode() and legacy.get(1)['label'] == 'Legacy checkpoint'
+    foreign = History(path.with_name('other.tex')).record(raw.decode(), 'open')
+    for invalid in (True, 9999, foreign):
+        try:
+            legacy.record(raw.decode(), 'restore', force=True, restored_from=invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('An invalid or cross-file restore link was accepted.')
+    assert len(legacy.list()['revisions']) == 2
+print('PASS: old history schemas retain versions and labels without guessing restore targets; invalid links are rejected')
 
 
 with tempfile.TemporaryDirectory() as directory:
@@ -183,6 +237,8 @@ with tempfile.TemporaryDirectory() as directory:
         assert path.read_text(encoding='utf-8') == original
         rows = listing()
         assert rows[0]['kind'] == 'restore'
+        assert rows[0]['restored_from'] == first
+        assert next(row for row in rows if row['id'] == first)['is_restore_target'] is True
         assert any(history.get(row['id'])['source'] == draft and row['kind'] == 'before-restore' for row in rows)
         assert history.get(second)['source'] == edited, 'Restoring must retain newer versions.'
         # The first actual edit after restoring is a new save, not an external edit.
@@ -191,8 +247,10 @@ with tempfile.TemporaryDirectory() as directory:
         assert len(listing()) == len(rows)
 
         stale = state()
+        restores_before = [row['id'] for row in listing() if row['kind'] == 'restore']
         path.write_bytes('来自外部 Codex 的修改\n'.encode('utf-8'))
         assert request('/history/restore', {**data, 'version':stale['version'], 'source':draft})[0] == 409
+        assert [row['id'] for row in listing() if row['kind'] == 'restore'] == restores_before, 'A rejected restore must not add a restore link.'
         assert path.read_text(encoding='utf-8') == '来自外部 Codex 的修改\n'
         assert listing()[0]['kind'] == 'external'
         other = path.with_name('other.tex')
@@ -223,6 +281,15 @@ with tempfile.TemporaryDirectory() as directory:
             except OSError:
                 pass
         assert snapshot(path) == before and not list(path.parent.glob('*.tmp'))
+        before_restore = history.list()['revisions']
+        with patch('editor.os.replace', side_effect=OSError('write failed')):
+            try:
+                save_source(path, history.get(second)['source'], before['version'], history, 'restore', restored_from=second)
+                raise AssertionError('A failed restore write must be reported.')
+            except OSError:
+                pass
+        assert history.list()['revisions'] == before_restore, 'A failed restore must neither create a link nor mark its selected target.'
+        assert snapshot(path) == before
         for i in range(105):
             with patch('history.datetime') as clock:
                 clock.now.return_value = start + timedelta(minutes=5*i)
@@ -295,6 +362,11 @@ with tempfile.TemporaryDirectory() as directory:
         assert code == 200 and restored['path'] == str(child) and restored['source'] == 'Child initial.', restored
         assert main.read_text() == 'Main unsaved draft.', 'Save the active draft before switching to the restored child.'
         assert child.read_text() == 'Child initial.'
+        restored_rows = history.list()['revisions']
+        child_restore = next(row for row in restored_rows if row['kind'] == 'restore')
+        assert child_restore['restored_from'] == ids['parts/input.tex']
+        assert next(row for row in restored_rows if row['id'] == ids['parts/input.tex'])['is_restore_target'] is True
+        assert next(row for row in restored_rows if row['id'] == ids['main.tex'])['is_restore_target'] is False
         assert any(history.get(row['id'])['source'] == 'Concurrent child edit.' for row in history.list()['revisions']), 'Keep the child backup.'
         assert request('/history?path=' + quote(str(child)))[1]['file'] == 'parts/input.tex'
         retired = root / 'retired.tex'; retired.write_text('Retired content.', encoding='utf-8')

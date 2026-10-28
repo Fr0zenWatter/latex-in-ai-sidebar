@@ -56,7 +56,7 @@ for invalid in ({**data, 'selection': 'not in document'}, {**data, 'messages': [
 answer = {'reply': '已准备建议。', 'replacement': 'Revised.'}
 event = {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': json.dumps(answer)}}
 process = Mock(returncode=0)
-process.communicate.return_value = (json.dumps(event).encode(), b'')
+process.communicate.return_value = (json.dumps(event).encode() + b'\n{"type":"turn.completed"}', b'')
 with patch('chat.shutil.which', return_value='codex.exe'), patch('chat.subprocess.Popen', return_value=process) as spawn:
     job = ChatJob(context)
     job.run()
@@ -146,7 +146,8 @@ with patch('chat.codex_executable', return_value='codex.exe'), patch('chat.subpr
 
     def run_batch(replacements):
         process.communicate.return_value = (json.dumps({'type': 'item.completed', 'item': {
-            'type': 'agent_message', 'text': json.dumps({'reply': 'Reviewed.', 'replacements': replacements})}}).encode(), b'')
+            'type': 'agent_message', 'text': json.dumps({'reply': 'Reviewed.', 'replacements': replacements})}}).encode()
+            + b'\n{"type":"turn.completed"}', b'')
         job = ChatJob(batch_context)
         job.run()
         return job.result
@@ -165,6 +166,7 @@ with patch('chat.codex_executable', return_value='codex.exe'), patch('chat.subpr
     for malformed in ([], [{'id': 1, 'replacement': 'partial'}],
                       [{'id': 1, 'replacement': 'a'}, {'id': 1, 'replacement': 'b'}],
                       [{'id': 1, 'replacement': 'a'}, {'id': 9, 'replacement': 'b'}],
+                      [{'id': 1, 'replacement': 'a', 'status': 'done'}, {'id': 2, 'replacement': None}],
                       [{'id': 1, 'replacement': 'a'}, {'id': 2, 'replacement': 123}]):
         assert run_batch(malformed)['status'] == 'error', 'Do not apply incomplete or mismatched batches.'
     ChatJob(local_context).run()
@@ -182,7 +184,8 @@ large_context = chat_context({'source':large_before, 'selection':large_before,
     'annotations':[{'id':1, 'start':0, 'end':len(large_before), 'selection':large_before, 'request':'Revise the page.'}]}, Path('paper.tex'))
 with patch('chat.codex_executable', return_value='codex.exe'), patch('chat.subprocess.Popen', return_value=process):
     process.communicate.return_value = (json.dumps({'type':'item.completed', 'item':{'type':'agent_message',
-        'text':json.dumps({'reply':'Reviewed.', 'replacements':[{'id':1, 'replacement':large_after}]})}}).encode(), b'')
+        'text':json.dumps({'reply':'Reviewed.', 'replacements':[{'id':1, 'replacement':large_after}]})}}).encode()
+        + b'\n{"type":"turn.completed"}', b'')
     job = ChatJob(large_context); job.run()
     assert job.result['status'] == 'done', job.result
     parts = job.result['replacements'][0]['reviews']
@@ -198,7 +201,8 @@ items = [{'id':7,'baseline':1,'sections':['2.1 Stability'],'diff':'- x^2\n+ x^3'
 summaries = [{'id':7,'summary':'将稳定性估计中的平方项改为立方项。'}]
 with patch('chat.codex_executable',return_value='codex.exe'), patch('chat.subprocess.Popen') as spawn:
     process = Mock(returncode=0)
-    process.communicate.return_value=(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps({'summaries':summaries})}}).encode(),b'')
+    process.communicate.return_value=(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps({'summaries':summaries})}}).encode()
+        + b'\n{"type":"turn.completed"}',b'')
     spawn.return_value=process
     for language, name in [('en','English'),('zh-CN','Simplified Chinese'),('zh-TW','Traditional Chinese'),('ja','Japanese'),
                            ('fr','French'),('de','German'),('es','Spanish'),('invalid','English')]:
@@ -209,6 +213,14 @@ with patch('chat.codex_executable',return_value='codex.exe'), patch('chat.subpro
         memory.save_summaries.assert_called_once_with(items,summaries,expected)
         assert f'concise {name} for a history activity feed' in process.communicate.call_args.args[0].decode()
         assert job.context is None
+    for malformed in ({'summaries':summaries,'status':'running'},
+                      {'summaries':[{**summaries[0],'status':'done'}]}):
+        process.communicate.return_value=(json.dumps({'type':'item.completed','item':{
+            'type':'agent_message','text':json.dumps(malformed)}}).encode() + b'\n{"type":"turn.completed"}',b'')
+        memory=Mock()
+        job=ChatJob({'task':'history-summary','items':items},memory); job.run()
+        assert job.result['status']=='error'
+        memory.save_summaries.assert_not_called()
 
 catalog = {'models':[{'slug':'visible','display_name':'Visible','visibility':'list',
                      'default_reasoning_level':'low','supported_reasoning_levels':[{'effort':'low'}]},

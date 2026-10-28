@@ -275,8 +275,10 @@ export function attachHistory(editor, request, getState, restore) {
     for (const row of revisions) {
       const button = document.createElement('button'); button.type = 'button'; button.dataset.id = row.id;
       button.className = 'history-entry'; button.setAttribute('aria-pressed', String(row.id === selected));
-      const icon = document.createElement('span'); icon.className = 'history-entry-icon'; icon.setAttribute('aria-hidden','true');
-      icon.innerHTML = '<svg viewBox="0 0 24 24"><path d="M14 2H5v20h14V7zM14 2v6h5M8 12h8M8 16h6"/></svg>';
+      const restored = row.kind === 'restore' || row.is_restore_target === true;
+      const icon = document.createElement('span'); icon.className = 'history-entry-icon' + (restored ? ' is-restore' : ''); icon.setAttribute('aria-hidden','true');
+      icon.innerHTML = restored ? '<svg viewBox="0 0 24 24"><path d="M3 10a9 9 0 1 1 2.3 8M3 4v6h6"/></svg>'
+        : '<svg viewBox="0 0 24 24"><path d="M14 2H5v20h14V7zM14 2v6h5M8 12h8M8 16h6"/></svg>';
       const text = document.createElement('span'); text.className = 'history-entry-text';
       const heading = document.createElement('strong'); heading.textContent = title(row); heading.title = (row.sections || []).join(' · ');
       const summary = document.createElement('span'); summary.className = 'history-entry-summary';

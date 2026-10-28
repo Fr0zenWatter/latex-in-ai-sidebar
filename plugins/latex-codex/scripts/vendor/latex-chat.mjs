@@ -948,7 +948,7 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
       if(memoryRevision===null)await loadMemory();
       if(token!==generation||doc!==editor.getDoc())return;
       conversation=[...history.slice(-38),{role:'user',content:question}];
-      const userMessage=message('user',question);if(draftInput)draftInput.value='';
+      const userMessage=message('user',question);if(draftInput?.value===text)draftInput.value='';
       const source = editor.getValue();
       const items = batch?.map(item => {
         const pos = validAnnotation(item);
@@ -988,7 +988,7 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
         return;
       }
     } catch(e) {
-      if (token === generation) { if(e.conflict)memoryRevision=null;notice(e.message); if (batch) annotationNotice(e.message, true); if(draftInput)draftInput.value = text; }
+      if (token === generation) { if(e.conflict)memoryRevision=null;notice(e.message); if (batch) annotationNotice(e.message, true); if(draftInput?.value==='')draftInput.value = text; }
     } finally { if (token === generation) { annotationSending = false; job = null; setSending(false); } }
   }
   function annotationEdits(batch, replacements) {

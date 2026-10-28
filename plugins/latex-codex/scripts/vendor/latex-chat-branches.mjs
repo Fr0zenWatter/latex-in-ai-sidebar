@@ -593,7 +593,7 @@ export function attachChatBranches({panel, messages, request, renderReply, mainS
   });
   labels(); side.hidden = true;
   return {get busy() { return busy; }, get loading() { return loading; },
-    get hasDrafts() { return [...quotes.values()].some(items => items.length) || !!input.value.trim() || [...drafts.values()].some(text => text.trim()) || [...mainDrafts.values()].some(text => text.trim()); },
+    get hasDrafts() { return [...quotes.values()].some(items => items.length) || !!mainInput.value.trim() || !!input.value.trim() || [...drafts.values()].some(text => text.trim()) || [...mainDrafts.values()].some(text => text.trim()); },
     syncBusy, stop, question, clearQuotes,
     memory(data) { threads = data.threads || []; renderTree(); renderQuotes(); },
     reset(preserveDrafts = false) {

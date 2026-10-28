@@ -29,16 +29,21 @@ def summary_language(value):
 
 
 # Keep immutable backups; show the last automatic save in each five-minute window.
-VISIBLE_REVISIONS = """WITH checkpoints AS (
-    SELECT id, file, created, kind, label, SUM(CASE WHEN kind NOT IN ('save', 'external') OR label!=''
+VISIBLE_REVISIONS = """WITH marked AS (
+    SELECT id, file, created, kind, label, restored_from, EXISTS(
+        SELECT 1 FROM revisions restored WHERE restored.restored_from=revisions.id
+    ) AS is_restore_target FROM revisions), checkpoints AS (
+    SELECT id, file, created, kind, label, restored_from, is_restore_target,
+        SUM(CASE WHEN kind NOT IN ('save', 'external') OR label!='' OR is_restore_target
         THEN 1 ELSE 0 END) OVER (PARTITION BY file ORDER BY id) AS checkpoint
-    FROM revisions), grouped AS (
-    SELECT id, file, created, kind, label, ROW_NUMBER() OVER (
-        PARTITION BY file, checkpoint, CASE WHEN kind IN ('save', 'external') AND label=''
+    FROM marked), grouped AS (
+    SELECT id, file, created, kind, label, restored_from, is_restore_target, ROW_NUMBER() OVER (
+        PARTITION BY file, checkpoint, CASE WHEN kind IN ('save', 'external') AND label='' AND NOT is_restore_target
             THEN CAST(strftime('%s', created) AS INTEGER)/300 ELSE -id END
         ORDER BY id DESC) AS position
     FROM checkpoints), visible AS (
-    SELECT id, file, created, kind, label, LEAD(id,1,0) OVER (PARTITION BY file ORDER BY id DESC) AS baseline
+    SELECT id, file, created, kind, label, restored_from, is_restore_target,
+        LEAD(id,1,0) OVER (PARTITION BY file ORDER BY id DESC) AS baseline
     FROM grouped WHERE position=1 AND kind!='before-annotation') """
 
 
@@ -53,8 +58,11 @@ class History:
             db.execute('''CREATE TABLE IF NOT EXISTS revisions (
                 id INTEGER PRIMARY KEY, file TEXT NOT NULL, created TEXT NOT NULL,
                 kind TEXT NOT NULL, label TEXT NOT NULL DEFAULT '',
-                digest TEXT NOT NULL, source BLOB NOT NULL)''')
+                digest TEXT NOT NULL, source BLOB NOT NULL, restored_from INTEGER)''')
+            if 'restored_from' not in {row['name'] for row in db.execute('PRAGMA table_info(revisions)')}:
+                db.execute('ALTER TABLE revisions ADD COLUMN restored_from INTEGER')
             db.execute('CREATE INDEX IF NOT EXISTS file_revisions ON revisions(file, id)')
+            db.execute('CREATE INDEX IF NOT EXISTS restored_revisions ON revisions(restored_from)')
             db.execute("CREATE TABLE IF NOT EXISTS chat_messages (id INTEGER PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, file TEXT NOT NULL DEFAULT '', selection TEXT NOT NULL DEFAULT '')")
             db.execute("CREATE TABLE IF NOT EXISTS chat_threads (id TEXT PRIMARY KEY, parent TEXT, root TEXT NOT NULL, title TEXT NOT NULL, quote TEXT NOT NULL DEFAULT '', message_id INTEGER, context TEXT NOT NULL DEFAULT '[]')")
             if 'deleted' not in {row['name'] for row in db.execute('PRAGMA table_info(chat_threads)')}:
@@ -202,10 +210,14 @@ class History:
             stream.write(f'{prefix}{marker}\n\n## {heading}\n\n{reply.strip()}\n')
         return {'file': target.name, 'already_saved': False}
 
-    def record(self, source, kind='external', force=False):
+    def record(self, source, kind='external', force=False, restored_from=None):
         with closing(self.connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
-            return self._record(db, self.file, source, kind, force)
+            if restored_from is not None:
+                target = db.execute('SELECT file FROM revisions WHERE id=?', (restored_from,)).fetchone() if type(restored_from) is int else None
+                if kind != 'restore' or target is None or target['file'] != self.file:
+                    raise ValueError('恢复关联必须指向同一文件的历史版本。')
+            return self._record(db, self.file, source, kind, force, restored_from)
 
     def record_sources(self, sources, kind='external'):
         """Capture project sources together, including edits outside the active file."""
@@ -230,21 +242,21 @@ class History:
         return revision
 
     @staticmethod
-    def _record(db, file, source, kind, force=False):
+    def _record(db, file, source, kind, force=False, restored_from=None):
         raw = source.encode('utf-8')
         digest = hashlib.sha256(raw).hexdigest()
         previous = db.execute('SELECT id, digest FROM revisions WHERE file=? ORDER BY id DESC LIMIT 1', (file,)).fetchone()
         if previous and previous['digest'] == digest and not force:
             return previous['id']
-        return db.execute('INSERT INTO revisions(file, created, kind, digest, source) VALUES (?, ?, ?, ?, ?)',
-                          (file, datetime.now(timezone.utc).isoformat(), kind, digest, zlib.compress(raw))).lastrowid
+        return db.execute('INSERT INTO revisions(file, created, kind, digest, source, restored_from) VALUES (?, ?, ?, ?, ?, ?)',
+                          (file, datetime.now(timezone.utc).isoformat(), kind, digest, zlib.compress(raw), restored_from)).lastrowid
 
     def list(self, before=None, language='en'):
         language = summary_language(language)
         if before is not None and (type(before) is not int or before < 1):
             raise ValueError('历史记录游标无效。')
         with closing(self.connect()) as db, db:
-            rows = db.execute(VISIBLE_REVISIONS + '''SELECT id, file, created, kind, label,
+            rows = db.execute(VISIBLE_REVISIONS + '''SELECT id, file, created, kind, label, restored_from, is_restore_target,
                 COALESCE(notes.baseline_id,visible.baseline) AS baseline, COALESCE(notes.count,0) AS annotation_count
                 FROM visible LEFT JOIN revision_annotations AS notes ON notes.revision_id=visible.id
                 WHERE (? IS NULL OR id<?) ORDER BY id DESC LIMIT 101''', (before, before)).fetchall()
@@ -262,7 +274,8 @@ class History:
                 else:
                     activity = {**dict(activity),'sections':json.loads(activity['sections'])}
                 summaries = dict(db.execute('SELECT language,summary FROM revision_summaries WHERE revision_id=? AND baseline_id=?', (row['id'],baseline)))
-                result.append({**dict(row), 'baseline':baseline, **{key:activity[key] for key in ('sections','description')},
+                result.append({**dict(row), 'is_restore_target':bool(row['is_restore_target']),
+                               'baseline':baseline, **{key:activity[key] for key in ('sections','description')},
                                'summaries':summaries, 'summary':summaries.get(language,'')})
         return {'revisions': result,
                 'next': rows[99]['id'] if len(rows) > 100 else None}
@@ -301,7 +314,7 @@ class History:
         if type(revision) is not int or revision < 1:
             raise ValueError('历史版本编号无效。')
         with closing(self.connect()) as db:
-            row = db.execute('SELECT id, file, created, kind, label, source FROM revisions WHERE id=?', (revision,)).fetchone()
+            row = db.execute('SELECT id, file, created, kind, label, source, restored_from FROM revisions WHERE id=?', (revision,)).fetchone()
             notes = db.execute('SELECT items,reply FROM revision_annotations WHERE revision_id=?', (revision,)).fetchone()
         if row is None:
             raise ValueError('这个项目中没有该历史版本。')

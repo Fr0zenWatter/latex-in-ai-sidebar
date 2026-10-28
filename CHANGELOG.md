@@ -1,5 +1,17 @@
 # Changelog / 更新日志
 
+## 0.3.10 — 2026-10-28
+
+- Preserve main-chat and sidebar drafts when switching sources, changing projects, restoring history or synchronizing external edits. Keep newly typed questions while an earlier request is sending or fails.
+- Refresh the project source list after additions, renames and deletions without replacing the active editor or resetting its mode.
+- Validate Codex response fields, completed turns and citation-tool results before applying edits or writing chat history. Reject incomplete or failed replies and unexpected fields.
+- Link restored history records to their exact source versions, keep those versions visible outside automatic-save groups and mark both with static restore icons. Migrate existing history databases without guessing old links.
+- Release the native Codex plugin as `0.3.10`. DeepSeek remains at `0.3.9-deepseek.1`; its adapter and installation are unchanged.
+
+保留主对话与侧栏草稿，修复发送期间新输入被清空或覆盖的问题；项目文件列表自动同步；加强 Codex 回复完整性及字段校验；历史恢复记录关联原版本并显示回转图标。本次仅更新 Codex。
+
+Validation / 验证：16 focused frontend, backend and integration checks passed on Windows, including real TeX compilation, source switching, citation navigation, history migration and failure-safe chat persistence. No live model request was made; macOS/Linux hardware was not retested.
+
 ## 0.3.9 / 0.3.9-deepseek.1 — 2026-10-21
 
 - Rename the project to **LaTeX in AI Sidebar** (formerly **codex-latex-editor / LaTeX Codex**) and introduce the AI sidebar workflow in both READMEs. Codex and DeepSeek Harness are supported; Claude integration is planned.

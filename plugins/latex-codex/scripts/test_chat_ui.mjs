@@ -170,6 +170,7 @@ assert.equal(wheel(0),false);
 assert.equal(wheel(-100),true);
 assert.equal(panel.style['--chat-content-size'],'11px');
 el('#chat-input').value='Keep my draft while moving.';
+assert.equal(chat.hasAnnotations,true,'The current main-chat draft participates in source-switch and external-reload protection.');
 el('#chat-messages').scrollTop=37;
 windowEvents.pointerdown({target:el('#outside')});assert.equal(panel.dataset.collapsed,'true');
 el('#chat-messages').scrollTop=0; // Hidden browser scrollers lose their rendered offset.
@@ -373,10 +374,33 @@ assert.equal(el('#chat-effort').value,'');assert.equal(el('#chat-effort').childr
 el('#chat-model').value='';el('#chat-model').onchange();assert.equal(el('#chat-effort').disabled,true);
 chooseColor('');
 await el('#chat-end').onclick();assert.equal(el('#chat-panel').dataset.collapsed,'true');assert.equal(el('#chat-messages').children.length,0);
+el('#chat-input').value='Question while history loads.';
+const loadingHistorySend=el('#chat-form').onsubmit({preventDefault(){}});
+el('#chat-input').value='Next question before history finishes.';
+await loadingHistorySend;
+assert.equal(el('#chat-input').value,'Next question before history finishes.','Loading history must not clear text typed after the send started.');
+assert.equal(calls.filter(call=>call.url==='/chat').at(-1).body.messages.at(-1).content,'Question while history loads.');
+el('#chat-input').value='';events.swapDoc();
 selection={from:{line:0,ch:13},to:{line:0,ch:20}};
 chat.open();el('#chat-input').value='New conversation';
 await el('#chat-form').onsubmit({preventDefault(){}});
 assert.equal(calls.filter(call=>call.url==='/chat').at(-1).body.messages.length,1);
+{
+  const previousAnswer=answer;
+  answer={status:'error',error:'Offline'};
+  el('#chat-input').value='Retry this question.';
+  await el('#chat-form').onsubmit({preventDefault(){}});
+  assert.equal(el('#chat-input').value,'Retry this question.','A failed send restores its question when the input is still empty.');
+  let finishRequest;
+  deferred=new Promise(resolve=>finishRequest=resolve);
+  const failedSend=el('#chat-form').onsubmit({preventDefault(){}});
+  assert.equal(el('#chat-input').value,'');
+  el('#chat-input').value='My next question.';
+  finishRequest({id:'failed-job'});await failedSend;
+  assert.equal(el('#chat-input').value,'My next question.','A failed send must preserve the next question typed while waiting.');
+  assert(el('#chat-messages').children.at(-1).children[1].innerHTML.includes('Retry this question.'),'The failed original question remains visible for copying and retrying.');
+  el('#chat-input').value='';answer=previousAnswer;deferred=null;
+}
 let release;deferred=new Promise(resolve=>release=resolve);
 el('#chat-input').value='Slow request';const pending=el('#chat-form').onsubmit({preventDefault(){}});
 assert.equal(el('#chat-typing').hidden,false,'The typing indicator follows the real request.');
@@ -546,7 +570,9 @@ assert.equal(source,'A much longer beginning chosen after');assert.equal(painted
 assert.equal(reviewActions(right).at(-1).disabled,false);
 await keepReview(right);assert.equal(source,'A much longer beginning chosen end');
 assert.equal(annotationSaves.at(-1).change.items[0].start,31);
-assert.equal(annotationSaves.at(-1).change.items.length,1);assert.equal(chat.hasAnnotations,false);
+assert.equal(annotationSaves.at(-1).change.items.length,1);
+assert.equal(chat.hasAnnotations,true,'Finishing reviews still protects the unsent main-chat question.');
+el('#chat-input').value='';assert.equal(chat.hasAnnotations,false);
 // A stale suggestion never overwrites an edited range; the other suggestion can still be kept.
 source='before chosen after';selection={from:{line:0,ch:0},to:{line:0,ch:6}};
 chat.openQuick({left:100,top:100});el('#chat-quick-input').value='First change';await el('#chat-quick-form').onsubmit({preventDefault(){}});

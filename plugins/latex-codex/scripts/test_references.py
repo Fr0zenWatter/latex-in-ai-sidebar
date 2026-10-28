@@ -203,8 +203,10 @@ with tempfile.TemporaryDirectory(prefix='latex quotes ') as directory:
             assert 'cite_tex' in prompt.decode() and 'Never invent a source link' in prompt.decode()
             assert 'proactively call cite_tex' in prompt.decode() and 'even if the user did not ask for navigation' in prompt.decode()
             return ('\n'.join(json.dumps(item) for item in [
-                {'type': 'item.completed', 'item': {'type': 'mcp_tool_call', 'server': 'tex_quotes', 'tool': 'cite_tex'}},
-                {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': json.dumps(answer)}}]).encode(), b'')
+                {'type': 'item.completed', 'item': {'id': 'quote-1', 'type': 'mcp_tool_call', 'server': 'tex_quotes',
+                    'tool': 'cite_tex', 'status': 'completed', 'result': {'content': []}}},
+                {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': json.dumps(answer)}},
+                {'type': 'turn.completed'}]).encode(), b'')
         ai.communicate.side_effect = communicate
         job = ChatJob(chat_context(chat_data, main), references=context)
         job.run()

@@ -806,6 +806,13 @@ attachInlineCompletion({editor,request,preferences,t,
   available:()=>!!version&&!conflict&&!selectionChat.busy&&!proofreadPdf?.active});
 const sourceFile=document.querySelector('#source-file'),projectDialog=document.querySelector('#project-dialog');
 const sourcePicker=mountSourceWheel({button:sourceFile,popup:document.querySelector('#source-file-wheel'),translate:t,onSelect:switchSource});
+let sourcePickerState='';
+function updateSourcePicker(data){
+  const state={files:data.files||[{path:data.path,name:data.name}],path:data.path,mainFile:data.main_file||data.path};
+  const signature=JSON.stringify(state);
+  if(signature===sourcePickerState)return;
+  sourcePicker.update(state);sourcePickerState=signature;
+}
 const autoCompile=document.querySelector('#auto-compile');
 autoCompile.checked=true;
 try{autoCompile.checked=preferences.getItem('latex-codex-auto-compile')!=='off';}catch(e){}
@@ -907,7 +914,7 @@ function display(data,preservePdf=false){
   saved=text;version=data.version;pdfVersion=preservePdf&&data.sync&&data.pdf_revision===pdfBuild?version:'';compiledLabels=pdfVersion?data.labels||{}:{};compiledCitations=pdfVersion?data.citations||{}:{};setSourceReadOnly(false);conflict=false;updateSyncControls();
   const label=document.querySelector('#filename');label.dataset.name=data.name;label.title=data.path;updateCompileCaption();
   projectRoot=data.project_root||'';mainFile=data.main_file||data.path;projectVersion=data.project_version||'';
-  sourcePicker.update({files:data.files||[{path:data.path,name:data.name}],path:data.path,mainFile});
+  updateSourcePicker(data);
   configurePreview();
   if(markdown){markdownPreview.clear();markdownPreview.render(text);}
 }
@@ -929,7 +936,7 @@ document.querySelector('#markdown-pdf-toggle').onclick=async()=>{
 };
 async function switchSource(path,initialize=true){
   if(path===document.querySelector('#filename').title)return true;
-  if(busy||conflict||selectionChat.busy||selectionChat.hasAnnotations){setText(status,'请先保存修改、处理冲突，并发送或删除批注，再切换源码。');return false;}
+  if(busy||conflict||selectionChat.busy||selectionChat.hasAnnotations){setText(status,'请先保存修改、处理冲突，并发送或清空批注及对话草稿，再切换源码。');return false;}
   if(editor.getValue()!==saved)await compile(false);
   if(conflict||editor.getValue()!==saved)return false;
   clearTimeout(timer);busy=true;setSourceReadOnly('nocursor');updateSyncControls();
@@ -941,7 +948,7 @@ document.querySelector('#project-open').onclick=()=>{document.querySelector('#fi
 document.querySelector('#project-cancel').onclick=()=>projectDialog.close();
 document.querySelector('#project-form').onsubmit=async event=>{
   event.preventDefault();const error=document.querySelector('#project-error');
-  if(busy||syncBusy||conflict||selectionChat.busy||selectionChat.hasAnnotations){setText(error,'请先保存修改、处理冲突，并发送或删除批注，再切换源码。');return;}
+  if(busy||syncBusy||conflict||selectionChat.busy||selectionChat.hasAnnotations){setText(error,'请先保存修改、处理冲突，并发送或清空批注及对话草稿，再切换源码。');return;}
   if(editor.getValue()!==saved)await compile(false);
   if(conflict||editor.getValue()!==saved)return;
   clearTimeout(timer);busy=true;setSourceReadOnly('nocursor');updateSyncControls();document.querySelector('#project-apply').disabled=true;
@@ -953,7 +960,7 @@ document.querySelector('#project-form').onsubmit=async event=>{
 async function clearPreview(){endSpacePan();pdfOutline.clear();pdfViewer.setDocument(null);pdfLinks.setDocument(null);if(pdfTask)await pdfTask.destroy();pdfTask=null;pdfBuild='';logText.textContent='';showCompileError(null);}
 async function openFile(selection={}){
   if(busy||syncBusy)return;
-  if((editor.getValue()!==saved||selectionChat.hasAnnotations)&&!confirm(t(selectionChat.hasAnnotations?'打开其他文件会放弃未发送批注和未保存修改。继续？':'打开其他文件会放弃尚未保存的修改。继续？')))return;
+  if((editor.getValue()!==saved||selectionChat.hasAnnotations)&&!confirm(t(selectionChat.hasAnnotations?'打开其他文件会放弃未发送批注、对话草稿和未保存修改。继续？':'打开其他文件会放弃尚未保存的修改。继续？')))return;
   clearTimeout(timer);busy=true;setSourceReadOnly('nocursor');updateSyncControls();let opened=false;
   setText(status,Object.keys(selection).length?'正在打开拖入的文件…':'请在系统窗口中选择 .tex 或 .md 文件…');
   try{
@@ -1043,7 +1050,7 @@ async function compile(compilePdf=true,automatic=false){
 async function restoreHistory(data){
   if(busy||syncBusy||editor.getValue()!==data.source||version!==data.version)throw new Error(t('编辑内容已变化，请刷新历史后重试。'));
   if(selectionChat.busy)throw new Error(t('Codex 正在回复，请稍后发送。'));
-  if(selectionChat.hasAnnotations)throw new Error(t('请先发送或删除批注，再恢复历史。'));
+  if(selectionChat.hasAnnotations)throw new Error(t('请先发送或清空批注及对话草稿，再恢复历史。'));
   clearTimeout(timer);busy=true;setSourceReadOnly('nocursor');updateSyncControls();
   try{
     const restored=await request('/history/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
@@ -1103,12 +1110,13 @@ async function adoptProjectSource(data){
 }
 async function load(force=false){
   if(loading||busy||syncBusy||historyDialog.open)return;
-  if(force&&(editor.getValue()!==saved||selectionChat.hasAnnotations)&&!confirm(t(selectionChat.hasAnnotations?'重新读取会放弃未发送批注和未保存修改。继续？':'重新读取会放弃编辑框中尚未保存的修改。继续？')))return;
+  if(force&&(editor.getValue()!==saved||selectionChat.hasAnnotations)&&!confirm(t(selectionChat.hasAnnotations?'重新读取会放弃未发送批注、对话草稿和未保存修改。继续？':'重新读取会放弃编辑框中尚未保存的修改。继续？')))return;
   loading=true;
   try{
     const data=await request('/state');
     if(busy||syncBusy||historyDialog.open)return;
     mainSource=data.main_source||'';mathHover.setMainSource(mainSource);
+    if(data.path===document.querySelector('#filename').title&&data.project_root===projectRoot&&data.main_file===mainFile)updateSourcePicker(data);
     if(!force&&version&&data.version===version){
       if(data.project_version&&data.project_version!==projectVersion){projectVersion=data.project_version;pdfVersion='';compiledLabels={};compiledCitations={};showCompileError(null);if(automaticCompilation())await compile(true,true);else setText(status,'项目文件已变化，请重新编译后定位。');}
       return;
@@ -2073,7 +2081,7 @@ def validate_annotation_change(change, source):
     return {**change, 'items':items}
 
 
-def save_source(path, source, version, history, kind='save', draft=None, annotation_change=None):
+def save_source(path, source, version, history, kind='save', draft=None, annotation_change=None, restored_from=None):
     change = validate_annotation_change(annotation_change, source) if annotation_change is not None else None
     before = snapshot(path)
     # CodeMirror uses LF internally; merely opening a CRLF child must not rewrite it.
@@ -2115,7 +2123,7 @@ def save_source(path, source, version, history, kind='save', draft=None, annotat
     if change:
         history.record_annotations(source, change)
     else:
-        history.record(source, kind, force=kind == 'restore')
+        history.record(source, kind, force=kind == 'restore', restored_from=restored_from)
     return snapshot(path)
 
 
@@ -3437,12 +3445,13 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
                             raise FileConflict('文件已被外部修改，请先重新读取。')
                         # Save the active draft before switching, then restore only the selected file.
                         save_current(data['source'], data['version'])
-                        save_source(revision_path, revision['source'], data['target_version'], History(revision_path, root), 'restore')
+                        save_source(revision_path, revision['source'], data['target_version'], History(revision_path, root),
+                                    'restore', restored_from=revision['id'])
                         self.server.sync_version = ''
                         self.reply(200, switch_source(revision_path))
                         return
                     # Preserve even an unsaved editor draft before restoring a snapshot.
-                    save_current(revision['source'], data['version'], kind='restore', draft=data['source'])
+                    save_current(revision['source'], data['version'], kind='restore', draft=data['source'], restored_from=revision['id'])
                     self.server.sync_version = ''
                     self.reply(200, project_state())
                     return

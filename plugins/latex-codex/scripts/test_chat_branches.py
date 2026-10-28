@@ -68,7 +68,8 @@ with tempfile.TemporaryDirectory() as directory:
     context = chat_context({'source':'Original source.','selection':'','messages':[{'role':'user','content':'Continue the branch.'}]},path)
     context.update(memory_thread=branch['thread'],branch_context=seed)
     process = Mock(returncode=0)
-    process.communicate.return_value = (json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps(answer)}}).encode(),b'')
+    process.communicate.return_value = (json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps(answer)}}).encode()
+        + b'\n{"type":"turn.completed"}',b'')
     with patch('chat.codex_executable',return_value='codex.exe'),patch('chat.subprocess.Popen',return_value=process):
         job = ChatJob(context,memory,branch_revision); job.run()
     assert job.result['status'] == 'done'

@@ -83,7 +83,7 @@ const context = vm.createContext({
   attachSourceQuotes(config){context.sourceQuotesConfig=config;return {enabled:false,refresh(){}};},
   attachProofreadPdf(){return {update(){},invalidate(){},active:false};},paintProofreadActions(){},
   attachProofreadNavigation(config){config.button.navigation=config;return {update(){}};},proofreadPdfPositions(){return [];},
-  mountSourceWheel({button}){return {update(data){button.textContent=data.files.find(file=>file.path===data.path)?.name;button.files=data.files;button.mainFile=data.mainFile;},setDisabled(value){button.disabled=value;}};},
+  mountSourceWheel({button}){return {update(data){button.updates=(button.updates||0)+1;button.textContent=data.files.find(file=>file.path===data.path)?.name;button.files=data.files;button.mainFile=data.mainFile;},setDisabled(value){button.disabled=value;}};},
   pdfPageBoxes:async()=>[[0,0,600,800],[0,0,600,800]],
   attachPdfBoxSelection(config){context.boxConfig=config;return {selection:null,clear(){this.selection=null;config.onSelect(null);},start(){return false;},move(){return false;},end(){return false;},bounds(){return {left:20,top:30,bottom:70};}};},
   attachPdfOutline(){return {clear(){},load:async()=>{}};},
@@ -1240,6 +1240,35 @@ After.`;
   assert.equal(editor.doc.source,'Line one\nLine two');assert.equal(vm.runInContext('saved',context),editor.doc.source,'Loaded CRLF files must not appear dirty in the LF editor.');
   source='Main source';editor.swapDoc=doc=>{editor.doc=doc;source=doc.source;};
   vm.runInContext("busy=false;syncBusy=false;conflict=false;loading=false;display({source:'Main source',version:'main-v',name:'main.tex',path:'/project/main.tex',project_root:'/project',main_file:'/project/main.tex',project_version:'project-v'});pdfVersion=version;pdfBuild='second'",context);
+  const pickerButton=element('#source-file'),pollDoc=editor.getDoc(),pollKeyMap=options.keyMap;
+  const pickerState={source:'Main source',version:'main-v',name:'main.tex',path:'/project/main.tex',project_root:'/project',main_file:'/project/main.tex',project_version:'project-v',files:[{path:'/project/main.tex',name:'main.tex'},{path:'/project/new.tex',name:'new.tex'}]};
+  context.fetch=async url=>{assert.equal(url,'/state');return {ok:true,json:async()=>pickerState};};
+  await vm.runInContext('load()',context);
+  assert.equal(pickerButton.files.length,2,'New sources appear even when the active source version is unchanged.');
+  const pickerUpdates=pickerButton.updates;
+  await vm.runInContext('load()',context);
+  assert.equal(pickerButton.updates,pickerUpdates,'Unchanged polling must not rebuild an open source picker.');
+  pickerState.files[1]={path:'/project/renamed.tex',name:'renamed.tex'};
+  await vm.runInContext('load()',context);
+  assert.equal(pickerButton.files[1].path,'/project/renamed.tex','Renamed sources replace old entries.');
+  pickerState.files=pickerState.files.slice(0,1);
+  await vm.runInContext('load()',context);
+  assert.equal(pickerButton.files.length,1,'Deleted sources disappear from the picker.');
+  assert.equal(editor.getDoc(),pollDoc,'Refreshing project metadata must not replace the editor document.');
+  assert.equal(options.keyMap,pollKeyMap,'Refreshing project metadata must preserve the editing mode.');
+  const protectedUpdates=pickerButton.updates;
+  context.fetch=async()=>({ok:true,json:async()=>({...pickerState,path:'/other/main.tex',project_root:'/other',main_file:'/other/main.tex'})});
+  await vm.runInContext('load()',context);
+  assert.equal(pickerButton.updates,protectedUpdates,'A different document cannot relabel the active source picker.');
+  const priorProjectReview=stored.get('latex-codex-proofread-project');stored.set('latex-codex-proofread-project','off');
+  vm.runInContext('selectionChat.hasAnnotations=true',context);
+  context.fetch=async()=>({ok:true,json:async()=>({...pickerState,source:'External edit',version:'external-v'})});
+  await vm.runInContext('load()',context);
+  assert.equal(vm.runInContext('conflict',context),true,'Unsent chat drafts use the existing external-change protection.');
+  assert.equal(editor.getDoc(),pollDoc);assert.equal(source,'Main source');
+  vm.runInContext('selectionChat.hasAnnotations=false;conflict=false',context);
+  if(priorProjectReview===undefined)stored.delete('latex-codex-proofread-project');else stored.set('latex-codex-proofread-project',priorProjectReview);
+  console.log('PASS: project file additions, renames and removals refresh without replacing the active draft or editing mode');
   const childState={source:'Appendix paragraph.',main_source:macroPreamble,version:'appendix-v',name:'body.tex',path:'/project/appendices/body.tex',project_root:'/project',main_file:'/project/main.tex',project_version:'project-v',sync:true,pdf_revision:'second',labels:{eq:'7'},citations:{paper:'9'},files:[{path:'/project/main.tex',name:'main.tex'},{path:'/project/appendices/body.tex',name:'appendices/body.tex'}]};
   const oldPreview=viewer.pdfDocument;let sourceSwitches=0;
   context.fetch=async(url,options)=>{

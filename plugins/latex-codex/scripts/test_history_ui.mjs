@@ -224,3 +224,17 @@ assert.equal($('file').textContent,'paper.tex');
 assert.deepEqual($('target').options.map(option=>option.value),['previous','current','2','1']);
 $('dialog').close();
 console.log('PASS: project file labels, same-file comparisons, preserved active drafts and version-safe child restore');
+
+rows[0].kind='restore';rows[1].is_restore_target=true;
+rows[2].is_restore_target=false;rows[3].is_restore_target='true';
+$('open').onclick();await flush();
+const icons=$('list').children.map(row=>row.children[0]);
+assert.deepEqual(icons.map(icon=>icon.className),['history-entry-icon is-restore','history-entry-icon is-restore','history-entry-icon','history-entry-icon'],
+  'Both restore-created records and persisted restore targets receive the return icon; ordinary records keep the file icon.');
+assert.equal(icons[0].innerHTML,icons[1].innerHTML);
+assert.equal(icons[2].innerHTML,icons[3].innerHTML);
+assert.notEqual(icons[0].innerHTML,icons[2].innerHTML);
+assert(icons.every(icon=>icon.attributes['aria-hidden']==='true'),'History icons remain decorative.');
+assert(!/animate|transform/.test(icons[0].innerHTML),'The return arrow is static.');
+$('dialog').close();
+console.log('PASS: static restore icons identify restored records and target versions without marking ordinary records');

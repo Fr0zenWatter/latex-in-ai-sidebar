@@ -329,7 +329,9 @@ class ChatJob:
 
     @staticmethod
     def completion_result(result):
-        completion = result['completion'] if isinstance(result, dict) and 'completion' in result else False
+        if not isinstance(result, dict) or set(result) != {'completion'}:
+            raise ValueError('AI 补全格式无效。')
+        completion = result['completion']
         if completion is not None and (not isinstance(completion, str) or len(completion) > 240
                 or '\n' in completion or '\r' in completion or any(ord(char) < 32 and char != '\t' for char in completion)):
             raise ValueError('AI 补全格式无效。')
@@ -353,13 +355,19 @@ class ChatJob:
                     event = json.loads(line)
                 except ValueError:
                     continue
+                if not isinstance(event, dict) or not isinstance(event.get('item', {}), dict):
+                    raise ValueError('Codex 补全事件格式无效。')
                 item = event.get('item', {})
                 if item.get('type') in ('command_execution', 'file_change', 'mcp_tool_call', 'web_search'):
                     raise ValueError('AI 补全不能使用工具。')
                 if event.get('type') in ('error', 'turn.failed'):
-                    raise ValueError(event.get('message') or event.get('error', {}).get('message') or 'Codex 补全失败。')
+                    error = event.get('error')
+                    raise ValueError(event.get('message') or (error.get('message') if isinstance(error, dict) else '')
+                                     or 'Codex 补全失败。')
                 if event.get('type') == 'item.completed' and item.get('type') == 'agent_message':
                     answer = item.get('text')
+                    if not isinstance(answer, str):
+                        raise ValueError('Codex 补全事件格式无效。')
                 if event.get('type') == 'turn.completed' and answer is not None:
                     if expired.is_set():
                         raise ValueError('Codex 回复超时，请重试。')
@@ -537,13 +545,19 @@ class ChatJob:
                     result = dsh_answer(stdout, self.process.returncode, references=self.references, quote_links=quote_links)
                 else:
                     result = self.codex_answer(stdout)
+                fields = ({'completion'} if completing else {'summaries'} if summarizing
+                          else {'reply', 'replacements'} if annotations else {'reply', 'replacement'})
+                if not isinstance(result, dict) or set(result) != fields:
+                    raise ValueError(provider_name + ' 返回格式无效，请重试。')
                 if completing:
                     result = self.completion_result(result)
                     if not self.cancelled.is_set():
                         self.result = result
                     return
                 if summarizing:
-                    if not isinstance(result,dict) or not isinstance(result.get('summaries'),list):
+                    if (not isinstance(result['summaries'], list)
+                            or any(not isinstance(item, dict) or set(item) != {'id', 'summary'}
+                                   for item in result['summaries'])):
                         raise ValueError('AI 改动摘要格式无效。')
                     if not self.cancelled.is_set():
                         self.memory.save_summaries(self.context['items'],result['summaries'],language)
@@ -554,7 +568,7 @@ class ChatJob:
                     expected = {item['id']: item for item in annotations}
                     if (not isinstance(replacements, list) or len(replacements) != len(expected)
                             or any(not isinstance(item, dict) or type(item.get('id')) is not int
-                                   or item['id'] not in expected or 'replacement' not in item
+                                   or item['id'] not in expected or set(item) != {'id', 'replacement'}
                                    or not (item['replacement'] is None or isinstance(item['replacement'], str))
                                    for item in replacements)
                             or len({item['id'] for item in replacements}) != len(expected)):
@@ -588,13 +602,23 @@ class ChatJob:
             self.context = None
 
     def codex_answer(self, stdout):
-        answer, error = None, ''
+        answer, completed = None, False
+        pending, finished = set(), set()
         for line in stdout.decode('utf-8', errors='replace').splitlines():
             try:
                 event = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(event, dict) or not isinstance(event.get('item', {}), dict):
+                raise ValueError('Codex 回复事件格式无效，请重试。')
+            event_type = event.get('type')
             item = event.get('item', {})
+            if event_type in ('error', 'turn.failed'):
+                error = event.get('error')
+                raise ValueError(event.get('message') or (error.get('message') if isinstance(error, dict) else '')
+                                 or 'Codex 请求失败，请重试。')
+            if completed and event_type in ('item.started', 'item.updated', 'item.completed', 'turn.started', 'turn.completed'):
+                raise ValueError('Codex 回复包含重复或未完成的回合，请重试。')
             if self.references and (item.get('type') in ('command_execution', 'file_change', 'web_search')
                     or item.get('type') == 'mcp_tool_call' and
                     (item.get('server') != 'tex_quotes' or item.get('tool') != 'cite_tex')):
@@ -602,10 +626,30 @@ class ChatJob:
             if (self.context or {}).get('task') == 'inline-completion' and item.get('type') in (
                     'command_execution', 'file_change', 'mcp_tool_call', 'web_search'):
                 raise ValueError('AI 补全不能使用工具。')
-            if event.get('type') == 'item.completed' and item.get('type') == 'agent_message':
+            if item.get('type') == 'mcp_tool_call':
+                identity = item.get('id')
+                result = item.get('result')
+                if (not isinstance(identity, str) or not identity or identity in finished
+                        or item.get('error') or item.get('status') not in ('in_progress', 'completed')
+                        or isinstance(result, dict) and result.get('isError')):
+                    raise ValueError('Codex 工具调用失败或格式无效，请重试。')
+                if event_type == 'item.completed':
+                    if item['status'] != 'completed' or not isinstance(result, dict):
+                        raise ValueError('Codex 工具调用未完成，请重试。')
+                    pending.discard(identity)
+                    finished.add(identity)
+                elif event_type in ('item.started', 'item.updated') and item['status'] == 'in_progress':
+                    pending.add(identity)
+                else:
+                    raise ValueError('Codex 工具调用未完成，请重试。')
+            if event_type == 'item.completed' and item.get('type') == 'agent_message':
                 answer = item.get('text')
-            if event.get('type') in ('error', 'turn.failed'):
-                error = event.get('message') or event.get('error', {}).get('message', '')
-        if self.process.returncode or answer is None:
-            raise ValueError(error or 'Codex 未返回结果，请确认 CLI 登录状态和网络后重试。')
+                if not isinstance(answer, str):
+                    raise ValueError('Codex 回复事件格式无效，请重试。')
+            if event_type == 'turn.completed':
+                if answer is None or pending:
+                    raise ValueError('Codex 未返回完整结果，请重试。')
+                completed = True
+        if self.process.returncode or not completed or answer is None or pending:
+            raise ValueError('Codex 未返回完整结果，请确认 CLI 登录状态和网络后重试。')
         return json.loads(answer)

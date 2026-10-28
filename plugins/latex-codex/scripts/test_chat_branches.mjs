@@ -70,6 +70,10 @@ const branches=attachChatBranches({panel,messages,request,
   isBusy:()=>sharedBusy,setBusy:value=>{sharedBusy=value;},
   model:()=>({source:'Unchanged source',model:'test-model',effort:'low',name:'Test model'}),referencesEnabled:()=>true,resize:value=>sizes.push(value)});
 branches.memory({...initial,threads});
+assert.equal(branches.hasDrafts,false);
+element('chat-input').value='Main question before any branch is opened';
+assert.equal(branches.hasDrafts,true,'The active main input participates in document-switch protection before it enters the draft map.');
+element('chat-input').value='';assert.equal(branches.hasDrafts,false);
 function addMessage(container,id) {
   const item=element(Symbol());item.className='chat-message';item.dataset.id=String(id);
   const body=element(Symbol());body.className='chat-markdown';item.append(body);container.append(item);return body;
@@ -322,6 +326,8 @@ assert(!buttons().some(button=>['branch-1','branch-2'].includes(button.dataset.t
 assert(storage.has('branch-3'),'An unrelated sidebar draft is not deleted.');
 assert.equal(element('chat-input').value,'Keep main input');assert.equal(cards().length,1,'Main chat quotes survive branch deletion.');
 branches.reset();assert(element('chat-branch').hidden);assert.equal(branches.busy,false);assert.equal(branches.loading,false);
+assert.equal(branches.hasDrafts,true,'Branch reset leaves the main input for its owner to clear after document-switch protection.');
+element('chat-input').value='';
 assert.equal(branches.hasDrafts,false);
 assert.equal(element('chat-tree').hidden,true,'A reset restores the default collapsed diagram.');
 assert(sizes.includes(true)&&sizes.includes(false));

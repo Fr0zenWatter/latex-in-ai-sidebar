@@ -63,6 +63,7 @@
 #history-list .history-entry:hover{background:#f8f9fb}
 #history-list .history-entry[aria-pressed=true]{background:linear-gradient(90deg,#f1ecfc,#effafd);box-shadow:inset 2px 0 #8c78bd}
 .history-entry-icon{display:grid;place-items:center;width:32px;height:32px;border:1px solid #e5e7eb;border-radius:8px;background:#f5f5f5;color:#59616a}
+.history-entry-icon.is-restore{border-color:#30363f;background:#30363f;color:#f8fafc}
 .history-entry-icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .history-entry-text{position:relative;display:flex;flex-direction:column;gap:6px;min-width:0}
 .history-entry-text strong{font:500 13px/1.5 system-ui;color:#171717}

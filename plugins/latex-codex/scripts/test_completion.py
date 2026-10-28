@@ -78,11 +78,14 @@ with patch('chat.codex_executable', return_value='codex'), patch('chat.subproces
         argv = spawn.call_args.args[0]
         assert argv[argv.index('--model')+1] == 'gpt-6-luna' and '--ignore-user-config' in argv
     assert run({'completion':None}).result['status'] == 'done'
-    for result in ({}, {'completion':123}, {'completion':'x'*241}, {'completion':'first\nsecond'}, {'completion':'x\0'}):
+    for result in ({}, {'completion':'x','status':'running'}, {'completion':123},
+                   {'completion':'x'*241}, {'completion':'first\nsecond'}, {'completion':'x\0'}):
         assert run(result).result['status'] == 'error'
     assert run({'completion':'x'}, [{'type':'item.completed','item':{'type':'mcp_tool_call'}}]).result['status'] == 'error'
     assert run({'completion':'x'}, terminal=False).result['status'] == 'error', 'A final-looking fragment is not a completed turn.'
     assert run({'completion':'x'}, [{'type':'turn.failed','error':{'message':'Failure'}}]).result['status'] == 'error'
+    assert run({'completion':'x'}, [[]]).result['status'] == 'error'
+    assert run({'completion':'x'}, [{'type':'item.completed','item':None}]).result['status'] == 'error'
     with patch('chat.threading.Timer') as timer:
         timer.side_effect = lambda delay, callback: Mock(start=callback)
         timed = run({'completion':'too late'})
