@@ -1,10 +1,11 @@
 """Run: python -B scripts/test_portability.py (stdlib only)."""
 from pathlib import Path
+from subprocess import TimeoutExpired
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from editor import compiler, tex_tool, choose_file, make_server, validate_pdf_boxes, accept_pdf_analysis
+from editor import compiler, tex_tool, choose_file, open_folder, make_server, validate_pdf_boxes, accept_pdf_analysis
 
 with patch('editor.shutil.which', side_effect=lambda name: '/tex/pdflatex' if name == 'pdflatex' else None):
     assert compiler('plain source') == ('pdflatex', '/tex/pdflatex')
@@ -28,6 +29,33 @@ with patch('editor.sys.platform', 'darwin'), patch('editor.subprocess.run',
     assert choose_file(Path('/papers with spaces/main.tex')) == '/papers with spaces/main.tex'
     assert run.call_args.args[0][-1] == str(Path('/papers with spaces/main.tex').parent)
     assert run.call_args.args[0][0] == 'osascript'
+
+with TemporaryDirectory(prefix='latex folder ') as directory:
+    folder = Path(directory) / '中文 folder'
+    folder.mkdir()
+    with patch('editor.sys.platform', 'win32'), patch('editor.os.startfile', create=True) as start:
+        open_folder(folder)
+        start.assert_called_once_with(str(folder))
+    for platform, command in (('darwin', 'open'), ('linux', 'xdg-open')):
+        with patch('editor.sys.platform', platform), patch('editor.subprocess.run',
+                return_value=SimpleNamespace(returncode=0)) as run:
+            open_folder(folder)
+            run.assert_called_once_with([command, str(folder)], capture_output=True, timeout=10)
+    for failure in (SimpleNamespace(returncode=1, stderr=b'Cannot open folder'),
+                    FileNotFoundError('Missing file manager'), TimeoutExpired('xdg-open', 10)):
+        options = {'side_effect': failure} if isinstance(failure, Exception) else {'return_value': failure}
+        with patch('editor.sys.platform', 'linux'), patch('editor.subprocess.run', **options):
+            try:
+                open_folder(folder)
+                raise AssertionError('File manager errors must be reported.')
+            except OSError:
+                pass
+    try:
+        open_folder(folder / 'missing')
+        raise AssertionError('Missing folders must be rejected.')
+    except FileNotFoundError:
+        pass
+print('PASS: native folder opening on Windows/macOS/Linux, Unicode/spaces and file manager failures')
 
 for invalid in (None, [], [[0,0,0,1]], [[0,False,1,1]], [[0,0,float('nan'),1]], [[0,0,1e9,1]]):
     try:

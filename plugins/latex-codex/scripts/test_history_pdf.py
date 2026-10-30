@@ -14,7 +14,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from unittest.mock import patch
 
 from editor import (make_server, snapshot, history_pdf_highlights, history_pdf_changes,
-                    history_pdf_cache_file, prune_history_pdf_cache, compile_tex)
+                    history_pdf_cache_file, history_pdf_context, prune_history_pdf_cache, compile_tex)
 from history import History
 
 def browser_analysis(url=None, path=None):
@@ -205,7 +205,7 @@ with tempfile.TemporaryDirectory() as directory:
             assert request('/history/pdf', payload)[0] == 200
         png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aVZkAAAAASUVORK5CYII=')
         images = [{'kind':change['kind'], **{side:[{'page':r['page'], 'png':'data:image/png;base64,'+base64.b64encode(png).decode()} for r in change[side]] for side in ('before','after')}} for change in data['changes']]
-        archive = history_pdf_cache_file(path, before, after)
+        archive = history_pdf_cache_file(path, before, after, context=history_pdf_context(server, path))
         assert not archive.exists(), 'Images are saved only after the browser has rendered both sides.'
         assert request('/history/pdf-cache', {**payload, 'images':images}) == (200, {'cache_error':''})
         with zipfile.ZipFile(archive) as stored:
@@ -248,7 +248,7 @@ with tempfile.TemporaryDirectory() as directory:
         assert request('/history/pdf', {**payload, 'path':'other.tex'})[0] == 409
         bad = history.record(before.replace(paragraph, r'\DefinitelyMissingCommand'), 'save')
         assert request('/history/pdf', {'path':str(path), 'id':bad, 'target_id':revision})[0] == 400
-        assert not history_pdf_cache_file(path, after, before.replace(paragraph, r'\DefinitelyMissingCommand')).exists()
+        assert not history_pdf_cache_file(path, after, before.replace(paragraph, r'\DefinitelyMissingCommand'), context=history_pdf_context(server, path)).exists()
         assert snapshot(path) == state and request('/pdf')[1] == b'%PDF-live-preview'
         print('PASS: real historical compilation, relative inputs, cropped paragraph pairing, later reflow isolation, cache, failure and unchanged live source/PDF')
     finally:

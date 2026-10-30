@@ -50,6 +50,9 @@ with tempfile.TemporaryDirectory() as directory:
         assert servers[0].server_port != servers[1].server_port
         assert request(servers[0], '/preferences', {'latex-codex-language': 'zh-CN'})[0] == 200
         assert json.loads(request(servers[1], '/preferences')[1])['latex-codex-language'] == 'zh-CN'
+        for value in ('on', 'off'):
+            assert request(servers[0], '/preferences', {'latex-codex-auto-save': value})[0] == 200
+            assert json.loads(request(servers[1], '/preferences')[1])['latex-codex-auto-save'] == value
         assert request(servers[0], '/preferences', {'latex-codex-pdf-box-auto-comment': 'on'})[0] == 200
         assert json.loads(request(servers[1], '/preferences')[1])['latex-codex-pdf-box-auto-comment'] == 'on'
         assert request(servers[0], '/preferences', {'latex-codex-pdf-invert': 'on'})[0] == 200
@@ -62,7 +65,7 @@ with tempfile.TemporaryDirectory() as directory:
         assert request(servers[0], '/preferences', {'latex-codex-forward-shortcut': 'Shift-Cmd-E'})[0] == 200
         assert json.loads(request(servers[1], '/preferences')[1])['latex-codex-forward-shortcut'] == 'Shift-Cmd-E'
         assert Preferences(database).read()['latex-codex-forward-shortcut'] == 'Shift-Cmd-E'
-        completion_settings = {'latex-codex-inline-completion': 'on', 'latex-codex-completion-effort': 'low',
+        completion_settings = {'latex-codex-english-completion': 'off', 'latex-codex-inline-completion': 'on', 'latex-codex-completion-effort': 'low',
                                'latex-codex-completion-model': 'gpt-6-luna'}
         assert request(servers[0], '/preferences', completion_settings)[0] == 200
         assert all(json.loads(request(servers[1], '/preferences')[1])[key] == value

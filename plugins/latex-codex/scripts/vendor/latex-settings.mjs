@@ -1,6 +1,8 @@
 import {translations} from './latex-locales.mjs';
 
 export const english = {
+  '选择主编译文件':'Choose main compilation file',
+  '当前文件被多个主文件引用，请选择本次编译使用的主文件。':'This file is included by multiple main files. Choose which one to compile.',
   '删除对话':'Delete conversation', '确认删除':'Confirm delete', '对话已删除。':'Conversation deleted.',
   '确定删除“{title}”？共 {count} 个对话（包含子对话），其中未发送的草稿也会清空。':'Delete “{title}”? This removes {count} conversations, including sub-branches, and clears their unsent drafts.',
   '调整主对话和侧栏大小':'Resize main and side chats',
@@ -20,6 +22,8 @@ export const english = {
   '草黄色':'Straw yellow',
   '浅绿色':'Pale green',
   'AI 行内补全':'AI inline completion',
+  '英文词典补全':'English dictionary completion',
+  '9800 个常用英语单词 + 项目单词；输入 3 个字母起匹配，支持 rsrch → research。Enter / Tab 接受，Esc 关闭。':'9,800 common English words + project words. Type 3 letters; rsrch matches research. Enter / Tab accepts, Esc closes.',
   'AI 补全模型':'AI completion model',
   'AI 补全思考等级':'AI completion reasoning effort',
   '停顿后显示简短灰色建议；使用已登录的 Codex，消耗账户额度。':'Short gray suggestions after a pause; uses your signed-in Codex and account quota.',
@@ -100,9 +104,9 @@ export const english = {
   '拖动滚动 PDF，悬停或点击打开章节目录':'Drag to scroll PDF; hover or click to open outline',
   '方向键滚动 PDF，Enter 打开章节目录':'Arrow keys scroll PDF; Enter opens outline',
   '跳转到章节':'Jump to section', '点击跳转':'Click to jump', 'PDF 当前':'PDF position',
-  '项目设置':'Project settings', '项目根目录':'Project folder', '主编译文件':'Main TeX file', '项目源码':'Project source', '应用':'Apply',
+  '项目设置':'Project settings', '项目根目录':'Project folder', '主编译文件':'Main TeX file', '项目源码':'Project source', '应用':'Apply', '选择文件':'Choose file',
   '主文件：{name}':'Main: {name}',
-  '选择包含主文件和附录的文件夹。主编译文件可填写相对路径；切换源码始终编译此文件。':'Choose the folder containing the main file and appendices. The main file can use a relative path; it is compiled when editing any source.',
+  '项目目录自动使用主编译文件所在目录；也可输入相对于当前项目的路径。':'The project folder follows the main file location. You can also enter a path relative to the current project.',
   '请先保存修改、处理冲突，并发送或清空批注及对话草稿，再切换源码。':'Save edits, resolve conflicts, and send or clear comments and chat drafts before switching source.',
   '项目文件已变化，请重新编译后定位。':'Project files changed. Recompile before navigating.',
   '选区跨越多个源码文件，请分别选择。':'This selection spans multiple source files. Select each file separately.',
@@ -181,7 +185,7 @@ export const english = {
   '按时间排列的版本':'Versions by date', '恢复此版本':'Restore this version', '确定恢复？':'Restore this version?', '取消':'Cancel', '确认恢复':'Confirm restore',
   '自动记录按 5 分钟合并显示；命名版本单独保留。':'Automatic saves are grouped every 5 minutes; named versions remain separate.',
   '本地保存；恢复前会保留当前内容和未保存草稿。':'Stored locally. Restoring preserves current contents and unsaved drafts.',
-  '首次打开':'First opened', '自动保存':'Saved', '外部修改':'External edit', '恢复版本':'Restored version', '恢复前的草稿':'Draft before restore',
+  '首次打开':'First opened', '自动保存':'Autosave', '外部修改':'External edit', '恢复版本':'Restored version', '恢复前的草稿':'Draft before restore',
   '保存版本':'Saved version', '正在读取版本…':'Loading version…', '正在读取历史…':'Loading history…', '暂时没有历史记录。':'No versions yet.',
   '这是最早保存的版本。':'This is the earliest saved version.', '两个版本内容相同。':'These versions are identical.',
   '打开／刷新历史时的编辑内容（含未保存修改）':'Editor contents captured on open/refresh, including unsaved changes', '所选对比版本':'Comparison version',
@@ -195,6 +199,14 @@ export const english = {
   '调整 LaTeX 和 PDF 宽度':'Resize source and PDF', '拖动调整宽度 · 双击恢复各半':'Drag to resize · Double-click for equal widths',
   '定位光标到 PDF':'Locate cursor in PDF', '跳到光标对应的 PDF 位置':'Jump to cursor location in PDF',
   '自动编译':'Automatic compilation', '编译选项':'Compilation options',
+  '自动编译需先开启自动保存。':'Enable autosave to use automatic compilation.',
+  '{name} · 手动保存与实时预览':'{name} · Manual save and live preview',
+  '{name} · 手动保存与编译':'{name} · Manual save and compilation',
+  '编译引擎':'Compilation engine', '自动识别':'Automatic detection',
+  '允许 MiKTeX 自动补齐宏包':'Allow MiKTeX to install missing packages',
+  '开启后可下载缺失宏包，仅对本插件生效。':'When enabled, missing packages can be downloaded. Applies only to this plugin.',
+  '允许自动补包并重新编译':'Allow package installation and recompile',
+  '缺少 {name}，请补齐宏包后重新编译。':'Missing {name}. Install the package and compile again.',
   '{name} · 自动保存，手动编译':'{name} · Autosave, manual compilation', '正在保存…':'Saving…', '已保存 · 自动编译已关闭':'Saved · Automatic compilation is off',
   '{name} · 自动保存，自动编译已暂停':'{name} · Autosave, automatic compilation paused',
   '已保存 · 自动编译已暂停，请手动编译':'Saved · Automatic compilation paused; compile manually',
@@ -204,7 +216,7 @@ export const english = {
   '空格拖动 · Alt + 空格缩放':'Space: pan · Alt+Space: zoom',
   '拖动':'Pan', '选字':'Select text', '切换拖动页面与选择文字':'Switch between panning and text selection',
   '缩小 PDF':'Zoom out', '放大 PDF':'Zoom in', '适合宽度':'Fit width', 'PDF 缩放':'PDF zoom', '滚轮或拖动缩放，点击恢复适合宽度':'Scroll or drag to zoom; click to fit width', '滚轮或拖动缩放，方向键微调':'Scroll or drag to zoom; arrow keys fine-tune', '恢复适合宽度':'Reset to fit width', '编译后的 PDF':'Compiled PDF',
-  '编译日志':'Compilation log', '源码操作':'Source actions', '注释 / 取消注释':'Toggle comment', '询问 Codex / 修改选区':'Ask Codex / Edit selection',
+  '编译日志':'Compilation log', '打开当前文件夹':'Open current folder', '源码操作':'Source actions', '注释 / 取消注释':'Toggle comment', '询问 Codex / 修改选区':'Ask Codex / Edit selection',
   '停止输入 3 秒后自动保存并编译':'Autosave and compile after 3 s', '尚未保存…':'Unsaved changes…', '请先处理文件冲突':'Resolve the file conflict first',
   '正在保存并编译…':'Saving and compiling…', '已保存 · 编译成功':'Saved · Compilation succeeded', '已保存 · 编译失败，请查看日志':'Saved · Compilation failed; see log',
   '已保存 · 编译成功，PDF 预览加载失败':'Saved · Compiled, but PDF preview failed to load', '文件已被外部修改，请先重新读取':'File changed externally; reload first',
@@ -252,6 +264,7 @@ export const english = {
   '可以继续追问；本次对话记忆保留。':'You can follow up; this conversation is remembered.',
   '选区内容已变化，未覆盖修改。请使用当前选区重新提问。':'Selection changed; edits were preserved. Use the current selection and ask again.',
   '编辑器':'Editor', '已应用到选区，将自动保存。':'Applied to selection. Autosave will follow.',
+  '已应用到选区，请手动保存。':'Applied to selection. Save manually.',
   '已应用。回到源码按 u 可撤销。':'Applied. Press u in the source editor to undo.',
   '跟随系统语言；无法识别时使用英文。可在齿轮设置中手动切换。':'Follows your system language; falls back to English. Change it in the gear settings if needed.',
   '章节目录样式':'Outline style'
@@ -260,7 +273,7 @@ export const supportedLanguages = ['en', 'zh-CN', 'zh-TW', 'ja', 'fr', 'de', 'es
 export let language = 'en';
 const bindings = new Map();
 const preferenceKeys = ['language','revision-color','outline-style','theme','custom-themes',
-  'editor-mode','source-font-size','forward-shortcut','chat-color','chat-bar-permanent','auto-compile','pdf-box-auto-comment','pdf-paper','proofread-editor','proofread-pdf','proofread-project','writing-style','split','inline-completion','completion-model','completion-effort'].map(name=>'latex-codex-'+name);
+  'editor-mode','source-font-size','forward-shortcut','chat-color','chat-bar-permanent','auto-save','auto-compile','pdf-box-auto-comment','pdf-paper','proofread-editor','proofread-pdf','proofread-project','writing-style','split','english-completion','inline-completion','completion-model','completion-effort','miktex-install'].map(name=>'latex-codex-'+name);
 let persisted = null, pending = {}, saveTimer, saveQueue = Promise.resolve();
 function preferenceData() {
   if (persisted === null) {
@@ -349,10 +362,12 @@ export function initSettings() {
         ['source-font-size','source-font-size'],['chat-color','chat-color']]) {
         preferences.setItem('latex-codex-'+name, $(id).value);
       }
+      preferences.setItem('latex-codex-auto-save', $('auto-save').checked ? 'on' : 'off');
       preferences.setItem('latex-codex-auto-compile', $('auto-compile').checked ? 'on' : 'off');
       preferences.setItem('latex-codex-pdf-box-auto-comment', $('pdf-box-auto-comment').checked ? 'on' : 'off');
       for (const name of ['proofread-editor','proofread-pdf']) preferences.setItem('latex-codex-'+name, $(name).checked ? 'on' : 'off');
       preferences.setItem('latex-codex-proofread-project', $('proofread-project').checked ? 'on' : 'off');
+      preferences.setItem('latex-codex-english-completion', $('english-completion').checked ? 'on' : 'off');
       preferences.setItem('latex-codex-inline-completion', $('inline-completion').checked ? 'on' : 'off');
       preferences.setItem('latex-codex-completion-model', $('completion-model').value);
       preferences.setItem('latex-codex-completion-effort', $('completion-effort').value);
@@ -361,6 +376,12 @@ export function initSettings() {
     finally { $('settings-save').disabled = false; }
   };
   window.addEventListener?.('pagehide', () => { savePreferences().catch(() => {}); });
+  const englishCompletion = $('english-completion');
+  englishCompletion.checked = preferences.getItem('latex-codex-english-completion') !== 'off';
+  englishCompletion.onchange = () => {
+    preferences.setItem('latex-codex-english-completion', englishCompletion.checked ? 'on' : 'off');
+    window.dispatchEvent(new Event('latex-english-completion-change'));
+  };
   const completionToggle = $('inline-completion'), completionEffort = $('completion-effort'), completionModel = $('completion-model');
   const completionOption = (value, name) => {
     const option = document.createElement('option'); option.value = value; option.textContent = name;

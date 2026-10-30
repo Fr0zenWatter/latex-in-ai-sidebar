@@ -1,6 +1,24 @@
 CodeMirror 5.65.20 (MIT), obtained from:
 https://registry.npmjs.org/codemirror/-/codemirror-5.65.20.tgz
 
+English dictionary completion uses `english-words.mjs`: 9,800 lowercase English
+words, ranked by English Wikipedia frequency and filtered against word-list 4.1.0.
+The word-list npm archive (MIT) is from
+https://registry.npmjs.org/word-list/-/word-list-4.1.0.tgz, verified against
+`sha512-4vtKyH8lGfaY8DHLTKQDfDxPixdK6BC/2W38TsPE07Wc8uPrMIbEO3quxBFSa2BfsDyG6pW47UEN/9tfYxN6BA==`.
+Frequency data (MIT), by Ilya Semenov, is pinned to
+https://github.com/IlyaSemenov/wikipedia-word-frequency/blob/325f6696e2e4fc31aee7ebfccad7601e4ac70168/results/enwiki-2023-04-13.txt
+with SHA-256 `e2071140a49a6c40c732bd68c36836ef13c0978233fb3d5e1b2a3c2d34faef59`.
+Derivation: read the frequency file in order, lowercase its words, keep unique
+word-list entries with at least three letters, and stop at 9,800. Both original
+MIT notices are retained in `english-words.LICENSE`. `latex-word-hint.mjs` is the
+local provider, combining this list with words from all project TeX/Markdown
+sources and the current unsaved draft, excluding the token being edited. Exact
+matches stay first after the word is fully typed, followed by prefixes and
+ordered-letter abbreviations (rsrch matches research), with project terms preferred
+within the same match quality. All data is local; no external request, AI service or
+runtime installation is used.
+
 Markdown preview uses Marked 16.4.2 (MIT), from
 https://registry.npmjs.org/marked/-/marked-16.4.2.tgz, and DOMPurify 3.3.1
 (Apache-2.0 OR MPL-2.0), from https://registry.npmjs.org/dompurify/-/dompurify-3.3.1.tgz.

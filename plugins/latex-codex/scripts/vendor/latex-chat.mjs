@@ -1109,7 +1109,7 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
     marker = editor.markText(pos.from, end, {className:'chat-selection',clearWhenEmpty:false});
     $('chat-selection').textContent = replacement;
     history.push({role:'user',content:'已将上一条修改应用到选区' + (color ? '，并只用 {\\color{' + color + '}...} 标记实际变化的内容' : '') + '。后续请以当前文档为准。'});
-    clearProposal(); message(t('编辑器'), t('已应用到选区，将自动保存。')); notice(t(vim ? '已应用。回到源码按 u 可撤销。' : '已应用。回到源码按 Ctrl+Z / Cmd+Z 可撤销。'));
+    clearProposal(); message(t('编辑器'), t(preferences.getItem('latex-codex-auto-save') === 'on' ? '已应用到选区，将自动保存。' : '已应用到选区，请手动保存。')); notice(t(vim ? '已应用。回到源码按 u 可撤销。' : '已应用。回到源码按 Ctrl+Z / Cmd+Z 可撤销。'));
     editor.setCursor(end);
     return true;
   }

@@ -27,7 +27,7 @@ For an ordinary open request, launch and show the editor directly. Detailed feat
 - Use this browser editor and local TeX when the project selects LaTeX in AI Sidebar for Codex; do not substitute the built-in file preview/compiler. Markdown opens in live preview without TeX.
 - Keep unsaved drafts, pending annotations and conflicts intact. Reuse the running editor's normal file-switch and synchronization flow. Do not overwrite either side of a conflict.
 - Before main-chat source edits, check the running editor's `/project-review`. When enabled, submit the latest `{action:"propose",path,version,source}` there. Otherwise use normal file edits and let external synchronization pick them up.
-- Compilation errors preserve source/cursor position; use the log's error-line button for explicit navigation. Missing TeX dependencies are reported, not installed automatically. Do not change global settings.
+- Compilation errors preserve source/cursor position; use the log's error-line button for explicit navigation. Agents do not install missing TeX dependencies automatically. The editor's MiKTeX package-install option is off by default and requires the user's own opt-in; keep it off during agent tests. Do not change global settings.
 
 ## Details only when needed
 

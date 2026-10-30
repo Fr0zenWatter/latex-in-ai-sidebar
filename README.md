@@ -42,7 +42,7 @@ Select chat text to add a quoted annotation or ask in a side conversation. Keep 
 
 ### Local history
 
-Edits are saved automatically. Compare source changes and the PDF before and after, then restore a previous version.
+Save edits manually, or enable autosave in the Save and compile menu. Compare source changes and the PDF before and after, then restore a previous version.
 
 [![Source and PDF history comparisons](docs/media/03-local-history.gif)](docs/media/03-local-history.gif)
 

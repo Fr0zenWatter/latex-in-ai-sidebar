@@ -1,5 +1,19 @@
 # Changelog / 更新日志
 
+## 0.3.11 — 2026-10-30
+
+- Add offline English dictionary completion for LaTeX and Markdown prose: 9,800 common words, project vocabulary and ordered-letter abbreviations, with normal undoable acceptance and an independent setting.
+- Default to manual saving. The Save and compile menu offers persistent autosave and automatic compilation controls; manual saves, draft/conflict guards and Markdown live preview remain available.
+- Add automatic or explicit pdfLaTeX/XeLaTeX selection per main file. Report missing packages and offer a user-controlled MiKTeX installation option, off by default, without changing global TeX settings. Keep agent checks installation-free.
+- Detect the main document through nested input/include links or a TeX root directive, resolve shared-child ambiguity with a dialog and reset stale PDF/build state when changing papers. Simplify project settings to a main-file path with a native picker.
+- Default PDF interaction to text selection, support double-click source navigation in both PDF modes and add a button to open the current source folder.
+- Retry the known SIAM 2022 counter/hyperref conflict through a narrowly scoped temporary wrapper; keep manuscript bytes and source line numbers intact.
+- Release only the native Codex plugin as `0.3.11`; DeepSeek remains `0.3.9-deepseek.1`.
+
+新增离线英文词典补全、主文件自动识别、编译引擎选择及缺包提示；保存默认改为手动，可在“保存并编译”菜单开启自动保存。PDF 默认选字，支持双击定位与打开当前文件夹。本次仅更新 Codex，文稿和全局 TeX 设置保持原样。
+
+Validation / 验证：25 focused frontend, backend and integration checks passed on Windows, including real pdfLaTeX/XeLaTeX compilation, bibliography processing, historical/proofread PDFs, main-file switching, offline completion and HTTP guards. Integration checks used temporary preferences with package installation disabled. No live model request was made; macOS/Linux hardware was not retested.
+
 ## 0.3.10 — 2026-10-28
 
 - Preserve main-chat and sidebar drafts when switching sources, changing projects, restoring history or synchronizing external edits. Keep newly typed questions while an earlier request is sending or fails.

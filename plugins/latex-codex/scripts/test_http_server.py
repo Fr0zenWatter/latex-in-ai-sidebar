@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory() as directory:
     path = Path(directory) / 'main.tex'
     path.write_text('Original.', encoding='utf-8')
     with patch('editor.compiler', return_value=('xelatex', 'unused')), patch('editor.shutil.which', return_value='unused'):
-        server = make_server(path, main_thread='')
+        server = make_server(path, main_thread='', preferences_path=Path(directory) / 'settings.sqlite3')
     accepted = threading.Event()
     original_get_request = server.get_request
 
@@ -48,6 +48,132 @@ with tempfile.TemporaryDirectory() as directory:
         assert request('/')[0] == 200, 'An idle browser preconnect must not block the page.'
         assert request('/vendor/latex-themes.mjs')[0] == 200
         assert request('/vendor/latex-native-annotations.mjs')[0] == 200
+        assert request('/vendor/latex-word-hint.mjs')[0] == 200
+        code, words = request('/vendor/english-words.mjs')
+        assert code == 200 and b'export const englishWords' in words
+        vocabulary_file = path.parent / 'unopened.tex'
+        vocabulary_file.write_text(r'Quasiharmonic hyperconvergence \hiddenprojectcommand', encoding='utf-8')
+        vocabulary = json.loads(request('/state')[1])['project_words']
+        assert 'quasiharmonic' in vocabulary and 'hyperconvergence' in vocabulary
+        assert 'hiddenprojectcommand' not in vocabulary
+        assert 'original' not in vocabulary, 'The active draft supplies its own words without indexing the unfinished token twice.'
+        active = json.loads(request('/state')[1])
+        code, body = request('/source', {'path':str(vocabulary_file), 'version':active['version']})
+        child_state = json.loads(body)
+        assert code == 200 and 'original' in child_state['project_words'] and 'quasiharmonic' not in child_state['project_words']
+        assert request('/source', {'path':str(path), 'version':child_state['version']})[0] == 200
+        vocabulary_file.write_text('newlyobservedterm', encoding='utf-8')
+        vocabulary = json.loads(request('/state')[1])['project_words']
+        assert 'newlyobservedterm' in vocabulary and 'hyperconvergence' not in vocabulary
+        vocabulary_file = vocabulary_file.rename(vocabulary_file.with_suffix('.md'))
+        assert 'newlyobservedterm' in json.loads(request('/state')[1])['project_words'], 'Renamed Markdown sources remain indexed.'
+        vocabulary_file.write_text('markdownprojectword', encoding='utf-8')
+        assert 'markdownprojectword' in json.loads(request('/state')[1])['project_words']
+        vocabulary_file.unlink()
+        assert 'markdownprojectword' not in json.loads(request('/state')[1])['project_words']
+        ignored_vocabulary = path.parent / 'ignored.txt'
+        ignored_vocabulary.write_text('neverindextxtwords', encoding='utf-8')
+        assert 'neverindextxtwords' not in json.loads(request('/state')[1])['project_words']
+        ignored_vocabulary.unlink()
+        print('PASS: project vocabulary includes unopened sources, excludes commands/non-sources and tracks external edits/deletions')
+        candidate = path.parent / '中文 project' / 'entry.md'
+        candidate.parent.mkdir()
+        candidate.write_text('# New project', encoding='utf-8')
+        with patch('editor.choose_file', return_value=str(candidate)) as choose:
+            code, body = request('/project/choose-file', {})
+            assert code == 200 and json.loads(body) == {'path': str(candidate)}
+            choose.assert_called_once_with(path)
+            assert json.loads(request('/state')[1])['path'] == str(path), 'Browsing must not switch projects.'
+        with patch('editor.choose_file', return_value=''):
+            assert json.loads(request('/project/choose-file', {})[1]) == {'cancelled': True}
+        with patch('editor.choose_file', side_effect=OSError('Picker unavailable')):
+            assert request('/project/choose-file', {})[0] == 500
+        picker_started, picker_release = threading.Event(), threading.Event()
+        def choose_slow(_path):
+            picker_started.set()
+            assert picker_release.wait(5)
+            return str(candidate)
+        with patch('editor.choose_file', side_effect=choose_slow), ThreadPoolExecutor(1) as pool:
+            picking = pool.submit(request, '/project/choose-file', {})
+            try:
+                assert picker_started.wait(2)
+                state = json.loads(request('/state')[1])
+                assert request('/save', {'source': state['source'], 'version': state['version']})[0] == 200
+            finally:
+                picker_release.set()
+            assert picking.result()[0] == 200
+        with patch('editor.compiler', return_value=('xelatex', 'unused')):
+            state = json.loads(request('/state')[1])
+            for invalid in ('', None, 12):
+                assert request('/project', {'main_file': invalid, 'version': state['version']})[0] == 400
+            assert request('/project', {'main_file': str(candidate), 'version': 'stale'})[0] == 409
+            code, body = request('/project', {'main_file': '中文 project/entry.md', 'version': state['version']})
+            configured = json.loads(body)
+            assert code == 200 and configured['main_file'] == str(candidate)
+            assert configured['project_root'] == str(candidate.parent)
+            assert 'original' not in configured['project_words'], 'A new project cannot inherit vocabulary from the previous root.'
+            assert [file['name'] for file in configured['files']] == ['entry.md']
+            code, body = request('/project', {'main_file': str(path), 'version': configured['version']})
+            assert code == 200 and json.loads(body)['project_root'] == str(path.parent)
+            with tempfile.TemporaryDirectory() as invalid_directory:
+                invalid_source = Path(invalid_directory) / 'invalid.md'
+                invalid_source.write_bytes(b'\xff')
+                current = json.loads(body)
+                assert request('/project', {'main_file': str(invalid_source), 'version': current['version']})[0] == 400
+                assert json.loads(request('/state')[1])['main_file'] == str(path), 'Invalid source leaves the live project intact.'
+        print('PASS: native project picker without mutations/blocked autosave, inferred main-file directory, relative/absolute paths and failed-apply protection')
+        with patch('editor.compiler', side_effect=lambda source, choice='auto': (choice if choice != 'auto' else 'pdflatex', 'unused')), \
+                patch('editor.compile_tex', return_value=(False, "MiKTeX\n! LaTeX Error: File `diagbox.sty' not found.", 'pdflatex')) as compile_job:
+            current = json.loads(request('/state')[1])
+            payload = {'source':current['source'], 'version':current['version'], 'engine_choice':'pdflatex', 'allow_installer':False}
+            code, body = request('/compile', payload)
+            result = json.loads(body)
+            assert code == 200 and result['missing_package'] == 'diagbox.sty' and result['miktex']
+            assert compile_job.call_args.kwargs['allow_installer'] is False
+            assert json.loads(request('/state')[1])['engine_choice'] == 'pdflatex'
+            build_before = server.build.name
+            assert request('/compile', {**payload, 'engine_choice':'xelatex', 'allow_installer':True})[0] == 200
+            assert server.build.name != build_before, 'Changing engines starts with clean temporary auxiliaries.'
+            assert compile_job.call_args.kwargs['allow_installer'] is True
+            assert json.loads(request('/state')[1])['allow_installer'] is True
+            for invalid in ('yes', 1, None):
+                assert request('/compile', {**payload, 'allow_installer':invalid})[0] == 400
+            assert request('/compile', {**payload, 'engine_choice':'cmd.exe'})[0] == 400
+            assert request('/compile', {**payload, 'engine_choice':'auto', 'allow_installer':False})[0] == 200
+        print('PASS: per-main engine persistence, fresh build on engine changes, structured missing packages and explicit installer boolean')
+        with patch('editor.open_folder') as open_folder, patch('editor.compile_tex') as no_compile, \
+                patch('editor.compiler', return_value=('xelatex', 'unused')):
+            assert request('/open-folder')[0] == 404, 'Opening a folder requires an explicit POST.'
+            assert request('/open-folder', {})[0] == 409
+            assert request('/open-folder', {'path': str(path.parent)})[0] == 409
+            open_folder.assert_not_called()
+            assert request('/open-folder', {'path': str(path)})[0] == 200
+            open_folder.assert_called_once_with(path.parent)
+            child = path.parent / '中文 subfolder' / 'notes.md'
+            child.parent.mkdir()
+            child.write_text('# Notes', encoding='utf-8')
+            state = json.loads(request('/state')[1])
+            assert request('/source', {'path': str(child), 'version': state['version']})[0] == 200
+            open_folder.reset_mock()
+            assert request('/open-folder', {'path': str(path)})[0] == 409
+            open_folder.assert_not_called()
+            assert request('/open-folder', {'path': str(child)})[0] == 200
+            open_folder.assert_called_once_with(child.parent)
+            with closing(HTTPConnection(*server.server_address, timeout=3)) as connection:
+                connection.request('POST', '/open-folder', json.dumps({'path': str(child)}),
+                                   {'Content-Type': 'application/json', 'Origin': 'https://example.com'})
+                response = connection.getresponse()
+                assert response.status == 403
+                response.read()
+            assert open_folder.call_count == 1, 'Cross-origin requests cannot launch the file manager.'
+            open_folder.side_effect = OSError('File manager unavailable')
+            code, body = request('/open-folder', {'path': str(child)})
+            assert code == 500 and json.loads(body)['error'] == 'File manager unavailable'
+            assert path.read_text(encoding='utf-8') == 'Original.' and child.read_text(encoding='utf-8') == '# Notes'
+            state = json.loads(request('/state')[1])
+            assert request('/source', {'path': str(path), 'version': state['version']})[0] == 200
+            no_compile.assert_not_called()
+        print('PASS: current source folder, subfile switches, stale/cross-origin rejection and failure reporting without saves/compiles')
         with closing(HTTPConnection(*server.server_address, timeout=3)) as connection:
             connection.request('GET', '/')
             response = connection.getresponse()

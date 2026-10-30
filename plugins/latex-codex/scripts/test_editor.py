@@ -56,7 +56,8 @@ with tempfile.TemporaryDirectory() as directory:
             assert name.decode() in ASSETS, 'Every boot module must be served, or the editor cannot initialize.'
         for name, mime in ASSETS.items():
             if '/' not in name:
-                assert ('/vendor/' + name).encode() in page, 'Asset must also be loaded by the editor.'
+                assert (('/vendor/' + name).encode() in page or
+                        any(('./' + name).encode() in module.read_bytes() for module in VENDOR.glob('*.mjs'))), 'Asset must also be loaded by the editor or a bundled module.'
             with direct.open(base + '/vendor/' + name) as response:
                 assert response.headers.get_content_type() == mime
                 assert response.read() == (VENDOR / name).read_bytes()

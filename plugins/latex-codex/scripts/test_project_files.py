@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix='latex project ') as directory:
     nested.write_text('\n'.join([r'\subsection{Nested input}', r'Nested input text to navigate.\par']), encoding='utf-8')
     appendix.write_text('\n'.join([r'\section{Appendix}\label{appendix:body}',
                                     r'Appendix text to navigate.\par']), encoding='utf-8')
-    server = make_server(main, main_thread='')
+    server = make_server(main, main_thread='', preferences_path=root / '.preferences.sqlite3')
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     base = f'http://127.0.0.1:{server.server_port}'
@@ -178,6 +178,21 @@ with tempfile.TemporaryDirectory(prefix='latex project ') as directory:
         assert code == 200 and restored['project_root'] == str(root) and restored['main_file'] == str(main), restored
         assert restored['path'] == str(appendix) and len(restored['files']) == 5, restored
         print('PASS: project root validation, stale switches, configurable nested main and sibling appendices using relative input paths')
+
+        other_main, other_child = root / 'letter.tex', root / 'letter-body.tex'
+        other_main.write_text('\n'.join([r'\documentclass{article}', r'\begin{document}',
+                                       r'\input{letter-body}', r'\end{document}']), encoding='utf-8')
+        other_child.write_text('An independent letter.', encoding='utf-8')
+        previous_build = server.build.name
+        main = other_main
+        current = switch(other_child)
+        assert server.build.name != previous_build and not server.pdf and not current['sync']
+        compiled = compile_current()
+        assert compiled['ok'] and (Path(server.build.name) / 'letter.pdf').is_file()
+        pdf = server.pdf
+        assert switch(other_main)['sync'] and server.pdf == pdf
+        assert switch(other_child)['sync'] and server.pdf == pdf
+        print('PASS: switching to another paper child detects its own main, compiles its PDF and retains it within that paper')
     finally:
         server.shutdown()
         worker.join()
