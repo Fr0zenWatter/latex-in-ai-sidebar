@@ -1035,3 +1035,218 @@ await el('#annotations-send').onclick();assert.equal(painted.length,101);
 await largeBulkChat.keepAll();assert.equal(source,'b'.repeat(101));assert.equal(painted.length,0);
 assert.equal(largeBulkSaves.length,2);assert.equal(largeBulkSaves.reduce((sum,change)=>sum+change.items.length,0),101);
 console.log('PASS: one bulk action accepts more than 100 split reviews through bounded history batches');
+
+// File switches retain each CodeMirror document and its own queued comments/reviews.
+const sourceDocs=new Map(),sourceDisk=new Map(),sourceEvents={},sourceSaves=[],sourceCalls=[];
+const sourceMeta=(path,source,version='v1')=>({path,source,version,name:path.split('/').pop(),project_root:'/project',main_file:'/project/main.tex'});
+let currentMeta=sourceMeta('/project/main.tex','😀 Main old.'),currentDoc=null,currentSelection={from:{line:0,ch:3},to:{line:0,ch:12}};
+function makeSourceDoc(text){
+  return {text,marks:[],getValue(){return this.text;},indexFromPos:pos=>pos.ch,
+    getRange(from,to){return this.text.slice(from.ch,to.ch);}};
+}
+currentDoc=makeSourceDoc(currentMeta.source);
+const sourceEditor={...editor,on:(name,fn)=>sourceEvents[name]=fn,getDoc:()=>currentDoc,getValue:()=>currentDoc.getValue(),
+  getRange:(from,to)=>currentDoc.getRange(from,to),getCursor:side=>currentSelection[side],
+  getOption:name=>name==='keyMap'?'default':false,listSelections:()=>[currentSelection],
+  markText(from,to,options={}){
+    const tracked={from:{...from},to:{...to},options,find(){return this.cleared?null:{from:this.from,to:this.to};},
+      clear(){this.cleared=true;},changed(){}};currentDoc.marks.push(tracked);return tracked;
+  },
+  setBookmark(point,options){return this.markText(point,point,options);},
+  replaceRange(text,from,to,origin){
+    assert.equal(origin,'codex-chat');currentDoc.text=currentDoc.text.slice(0,from.ch)+text+currentDoc.text.slice(to.ch);
+    const shift=text.length-(to.ch-from.ch);
+    for(const mark of currentDoc.marks.filter(mark=>!mark.cleared)){
+      if(mark.from.ch>=to.ch){mark.from.ch+=shift;mark.to.ch+=shift;}
+      else if(mark.to.ch>from.ch)mark.clear();
+    }
+  }};
+let sourceAnswer, sourceStart = null, sourceSaveFailure = null, sourceOpenPause = null;
+const sourceCancels = [];
+const sourceChat=attachSelectionChat(sourceEditor,async(url,options)=>{
+  if(url==='/chat/models')return {models:[]};
+  if(url==='/chat/history')return {messages:[],revision:0};
+  if(url==='/chat'){const body=JSON.parse(options.body);sourceCalls.push(body);return sourceStart ? await sourceStart(body) : {id:'source-job'};}
+  if(url.startsWith('/chat?id='))return typeof sourceAnswer === 'function' ? sourceAnswer(sourceCalls.at(-1)) : sourceAnswer;
+  if(url==='/chat/cancel'){sourceCancels.push(JSON.parse(options.body));return {};}
+  return {};
+},items=>{painted=[...items];},async(after,change)=>{
+  if (sourceSaveFailure===currentMeta.path) throw new Error('Source save failed');
+  assert.equal(currentDoc.text,change.before);sourceSaves.push({path:currentMeta.path,after});
+  sourceDisk.set(currentMeta.path,after);currentMeta.version='saved-v2';
+},()=>currentDoc?.text||'',()=>false,{capture:()=>currentMeta,open:async(path,owner)=>{
+  if (owner) {
+    assert.equal(sourceChat.busy,true);assert.equal(sourceChat.isBatchSwitch(owner),true);
+    assert.equal(sourceChat.prepareSourceSwitch(),false,'Only the batch can switch sources while collecting replies.');
+    assert.equal(sourceChat.prepareSourceSwitch(owner),true);
+  }
+  if (sourceOpenPause) await sourceOpenPause(path,owner);
+  return !switchAnnotationSource(sourceMeta(path,sourceDisk.get(path))).conflict;
+}});
+function switchAnnotationSource(meta,preserve=true){
+  const retained=sourceChat.sourceDocument(meta,()=>makeSourceDoc(meta.source),preserve);
+  currentDoc=retained.doc;currentMeta=meta;el('#filename').title=meta.path;
+  sourceEvents.swapDoc();sourceChat.activateSource();sourceDocs.set(meta.path,currentDoc);return retained;
+}
+sourceDisk.set(currentMeta.path,currentMeta.source);
+switchAnnotationSource(currentMeta,false);chooseColor('');
+sourceChat.openQuick({left:100,top:100});el('#chat-quick-input').value='Revise main';
+assert.equal(sourceChat.prepareSourceSwitch(),true,'A valid open comment is saved before switching.');
+const mainNote=sourceChat.allItems[0];assert.equal(mainNote.request,'Revise main');
+const mainDoc=currentDoc,childMeta=sourceMeta('/project/parts/child.tex','Child old.');sourceDisk.set(childMeta.path,childMeta.source);
+switchAnnotationSource(childMeta);
+assert.equal(painted.length,0);assert.equal(sourceChat.hasAnnotations,true,'An inactive queued comment still protects refresh/close.');
+assert.equal(sourceChat.allItems[0].path,'/project/main.tex');assert.equal(mainNote.marker.find().from.ch,3);
+currentSelection={from:{line:0,ch:0},to:{line:0,ch:10}};
+sourceChat.openQuick({left:100,top:100});el('#chat-quick-input').value='Revise child';
+await el('#chat-quick-form').onsubmit({preventDefault(){}});
+const childNote=painted[0];assert.notEqual(childNote.id,mainNote.id,'IDs remain unique across files.');
+sourceAnswer=body=>({status:'done',reply:'File revised.',replacement:null,replacements:body.annotations.map(item=>({
+  id:item.id,replacement:body.source === 'Child old.' ? 'Child new.' : 'Main new.'}))});
+await el('#annotations-send').onclick();
+assert.deepEqual(sourceCalls.map(body=>body.source),['Child old.','😀 Main old.'],'One Send processes every annotated file in this article.');
+assert(sourceCalls.every(body=>body.annotations.length===1),'Each file keeps its own source snapshot and offsets.');
+assert.equal(sourceCalls[1].annotations[0].start,2,'Unicode offsets stay relative to their own file.');
+assert.equal(sourceChat.allItems.length,2);const childDoc=currentDoc;
+assert.equal(currentMeta.path,childMeta.path,'The editor returns to its original file after sending all files.');
+assert(sourceChat.allItems.every(item=>item.review));assert.equal(sourceSaves.length,0,'Generating reviews never accepts them.');
+assert.equal(el('#annotations-toggle').textContent,'批注 · 2');assert.equal(el('#annotations-send').hidden,true);
+await sourceChat.allItems.find(item=>item.path==='/project/main.tex').edit({left:100,top:100});
+assert.equal(currentDoc,mainDoc);assert.equal(mainNote.request,'Revise main','Clicking an inactive PDF comment opens its own source and keeps its requirement.');
+assert.equal(sourceChat.allItems.find(item=>item.id===mainNote.id).start,2,'Saved source anchors retain Unicode code-point offsets.');
+await el('#annotations-send').onclick();assert.equal(sourceCalls.length,2,'Send never repeats already generated reviews.');
+await sourceChat.allItems.find(item=>item.path===childMeta.path).review.keep();
+assert.equal(currentDoc,childDoc);assert.equal(currentDoc.text,'Child new.');assert.equal(mainDoc.text,'😀 Main old.');
+assert.deepEqual(sourceSaves,[{path:childMeta.path,after:'Child new.'}]);
+assert.equal(sourceChat.allItems.length,1);assert.equal(sourceChat.hasAnnotations,true);
+assert.equal(sourceChat.allItems[0].path,'/project/main.tex');
+await sourceChat.allItems[0].review.undo();
+assert.equal(currentDoc,mainDoc);assert.equal(currentDoc.text,'😀 Main old.');
+assert.equal(sourceChat.allItems.length,0);assert.equal(sourceChat.hasAnnotations,false);assert.equal(sourceSaves.length,1);
+
+currentSelection={from:{line:0,ch:3},to:{line:0,ch:12}};
+sourceChat.openQuick({left:100,top:100});el('#chat-quick-input').value='Keep this pending';
+assert.equal(sourceChat.prepareSourceSwitch(),true);switchAnnotationSource(sourceMeta(childMeta.path,sourceDisk.get(childMeta.path)));
+sourceDisk.set('/project/main.tex','External main revision.');
+const stale=switchAnnotationSource(sourceMeta('/project/main.tex',sourceDisk.get('/project/main.tex'),'external-v2'));
+assert.equal(stale.conflict,true);assert.equal(currentDoc,mainDoc);assert.equal(mainDoc.text,'😀 Main old.');
+assert.equal(sourceChat.hasAnnotations,true,'An externally changed file cannot silently discard its retained comments.');
+el('#chat-input').value='Unsent conversation draft';assert.equal(sourceChat.prepareSourceSwitch(),false);
+el('#chat-input').value='';switchAnnotationSource(sourceMeta('/project/main.tex',sourceDisk.get('/project/main.tex'),'external-v2'),false);
+assert.equal(sourceChat.hasAnnotations,false);assert.equal(sourceChat.allItems.length,0);
+assert.equal(currentDoc.text,'External main revision.');
+assert.equal(sourceChat.prepareSourceSwitch(),true);
+el('#chat-input').value='Typed while the source request was pending';
+switchAnnotationSource(sourceMeta(childMeta.path,sourceDisk.get(childMeta.path)));
+assert.equal(el('#chat-input').value,'Typed while the source request was pending','Late conversation input survives the file response.');
+assert.equal(sourceChat.hasAnnotations,true);
+console.log('PASS: article-wide Send, per-file snapshots and Unicode offsets, original-file restoration, inactive PDF Keep/Undo, draft and external-conflict protection');
+
+async function queueSourceComments(texts=['Main pending.','Child pending.','Later pending.']) {
+  el('#chat-input').value='';
+  for (const [index,text] of texts.entries()) {
+    const meta=sourceMeta('/project/batch'+index+'.tex',text);
+    sourceDisk.set(meta.path,text);switchAnnotationSource(meta,index!==0);
+    currentSelection={from:{line:0,ch:0},to:{line:0,ch:text.length}};
+    sourceChat.openQuick({left:100,top:100});el('#chat-quick-input').value='Revise '+index;
+    await el('#chat-quick-form').onsubmit({preventDefault(){}});
+  }
+}
+const revisedFile=body=>({status:'done',reply:'Reviewed this file.',replacement:null,
+  replacements:body.annotations.map(item=>({id:item.id,replacement:'Revised '+item.selection}))});
+
+await queueSourceComments();
+const partialStart=sourceCalls.length;
+sourceAnswer=body=>body.source==='Main pending.'?{status:'error',error:'Model offline'}:revisedFile(body);
+await el('#annotations-send').onclick();
+assert.deepEqual(sourceCalls.slice(partialStart).map(body=>body.source),['Later pending.','Main pending.']);
+assert.equal(sourceChat.allItems.filter(item=>item.review).length,1);
+assert.equal(sourceChat.allItems.filter(item=>!item.review).length,2,'Failure keeps the failed file and unprocessed files pending.');
+assert.match(el('#annotations-status').textContent,/batch0.tex.*Model offline/);
+assert.equal(sourceChat.busy,false);sourceAnswer=revisedFile;
+await el('#annotations-send').onclick();
+assert.deepEqual(sourceCalls.slice(partialStart).map(body=>body.source),['Later pending.','Main pending.','Main pending.','Child pending.']);
+assert(sourceChat.allItems.every(item=>item.review),'Retry sends only the remaining files.');
+
+await queueSourceComments();
+const stoppedStart=sourceCalls.length;
+let releaseSourceStart;
+sourceStart=()=>new Promise(resolve=>releaseSourceStart=resolve);
+const stoppedFiles=el('#annotations-send').onclick();await new Promise(resolve=>setImmediate(resolve));
+assert.equal(sourceChat.busy,true);assert.equal(el('#annotations-send').disabled,true);
+assert.equal(sourceChat.isBatchSwitch({}),false);assert.equal(sourceChat.prepareSourceSwitch(),false);
+assert.equal(el('#annotations-stop').hidden,false);
+el('#annotations-stop').onclick();releaseSourceStart({id:'stopped-source'});await stoppedFiles;sourceStart=null;
+assert.equal(sourceCalls.length,stoppedStart+1,'Stop prevents later files from starting.');
+assert(sourceCancels.some(item=>item.id==='stopped-source'),'A late-starting model request is still canceled.');
+assert.equal(sourceChat.allItems.length,3);assert(sourceChat.allItems.every(item=>!item.review));
+assert.equal(sourceChat.busy,false);assert.equal(el('#annotations-send').disabled,false);
+
+await queueSourceComments(['Only pending.']);
+const emptyMeta=sourceMeta('/project/no-comments.tex','Unannotated source.');sourceDisk.set(emptyMeta.path,emptyMeta.source);
+switchAnnotationSource(emptyMeta);const emptyDoc=currentDoc,emptyStart=sourceCalls.length;
+assert.equal(painted.length,0);assert.equal(el('#annotations-send').hidden,false,'Send remains available when only another file has pending comments.');
+assert.equal(el('#annotations-toggle').textContent,'批注 · 1');
+sourceAnswer=body=>({status:'done',reply:'No source change needed.',replacement:null,
+  replacements:body.annotations.map(item=>({id:item.id,replacement:null}))});
+await el('#annotations-send').onclick();
+assert.equal(sourceCalls.length,emptyStart+1);assert.equal(currentDoc,emptyDoc,'Returning to an unannotated file preserves its CodeMirror document.');
+assert.equal(currentMeta.path,emptyMeta.path);assert.equal(sourceChat.allItems.length,0);assert.equal(sourceChat.hasAnnotations,false);
+
+await queueSourceComments();
+sourceChat.allItems.find(item=>item.path==='/project/batch0.tex').marker.clear();
+const invalidStart=sourceCalls.length;await el('#annotations-send').onclick();
+assert.equal(sourceCalls.length,invalidStart,'An invalid inactive anchor blocks the whole batch before model requests.');
+assert.match(el('#annotations-status').textContent,/批注选区已变化/);
+
+await queueSourceComments();sourceAnswer=revisedFile;
+sourceDisk.set('/project/batch0.tex','Changed externally.');
+const conflictedStart=sourceCalls.length;await el('#annotations-send').onclick();
+assert.deepEqual(sourceCalls.slice(conflictedStart).map(body=>body.source),['Later pending.']);
+assert.equal(sourceChat.allItems.find(item=>item.path==='/project/batch0.tex').source,'Main pending.');
+assert.equal(sourceChat.allItems.filter(item=>!item.review).length,2,'External conflicts preserve all remaining comments.');
+assert.equal(sourceChat.busy,false);
+console.log('PASS: multi-file failure/retry, stop during request startup, pending-only inactive files, original empty document restoration, stale anchors and external conflicts');
+
+async function queueArticleReviews() {
+  await queueSourceComments();sourceAnswer=revisedFile;await el('#annotations-send').onclick();
+  assert.equal(sourceChat.allItems.filter(item=>item.review).length,3);
+}
+async function queueUnsentNote() {
+  const meta=sourceMeta('/project/unsent.tex','Unsent note.');sourceDisk.set(meta.path,meta.source);
+  switchAnnotationSource(meta);currentSelection={from:{line:0,ch:0},to:{line:0,ch:meta.source.length}};
+  sourceChat.openQuick({left:100,top:100});el('#chat-quick-input').value='Keep pending';
+  await el('#chat-quick-form').onsubmit({preventDefault(){}});return currentDoc;
+}
+await queueArticleReviews();const unsentKeepDoc=await queueUnsentNote();
+const articleKeepStart=sourceSaves.length,articleKeepCalls=sourceCalls.length;
+assert.equal(await sourceChat.keepAll(),true);
+assert.deepEqual(new Set(sourceSaves.slice(articleKeepStart).map(item=>item.path)),new Set(['/project/batch0.tex','/project/batch1.tex','/project/batch2.tex']));
+assert.equal(currentDoc,unsentKeepDoc);assert.equal(currentDoc.text,'Unsent note.');
+assert.equal(sourceCalls.length,articleKeepCalls,'Article-wide Keep does not request new AI replies.');
+assert.equal(sourceChat.allItems.length,1);assert.equal(sourceChat.allItems[0].request,'Keep pending');
+
+await queueArticleReviews();const unsentUndoDoc=await queueUnsentNote();
+const articleUndoStart=sourceSaves.length,articleUndoCalls=sourceCalls.length;
+sourceChat.undoAll();assert.equal(currentDoc,unsentUndoDoc);
+assert.equal(sourceSaves.length,articleUndoStart);assert.equal(sourceCalls.length,articleUndoCalls);
+assert.equal(sourceChat.allItems.length,1);assert.equal(sourceChat.allItems[0].request,'Keep pending');
+assert.equal(sourceDisk.get('/project/batch0.tex'),'Main pending.');
+
+await queueArticleReviews();sourceSaveFailure='/project/batch0.tex';
+const failedKeepStart=sourceSaves.length;
+await assert.rejects(()=>sourceChat.keepAll(),/Source save failed/);
+assert.deepEqual(sourceSaves.slice(failedKeepStart).map(item=>item.path),['/project/batch2.tex']);
+assert.equal(sourceChat.allItems.filter(item=>item.review).length,2,'Failed Keep preserves the remaining files and their suggestions.');
+assert.equal(sourceChat.busy,false);sourceSaveFailure=null;
+await sourceChat.keepAll();assert.equal(sourceChat.allItems.length,0);
+assert.equal(sourceSaves.length,failedKeepStart+3,'Retry keeps only the remaining files.');
+
+await queueArticleReviews();const stoppedKeepStart=sourceSaves.length;
+let releaseKeepSwitch;sourceOpenPause=()=>new Promise(resolve=>releaseKeepSwitch=resolve);
+const stoppedArticleKeep=sourceChat.keepAll();await new Promise(resolve=>setImmediate(resolve));
+assert.equal(sourceChat.busy,true);assert.equal(typeof releaseKeepSwitch,'function');
+el('#annotations-stop').onclick();releaseKeepSwitch();assert.equal(await stoppedArticleKeep,false);sourceOpenPause=null;
+assert.equal(sourceSaves.length,stoppedKeepStart+1);assert.equal(sourceChat.allItems.filter(item=>item.review).length,2);
+assert.equal(sourceChat.busy,false);
+console.log('PASS: article-wide Keep/Undo, preserved unsent notes and current document, no extra AI calls, failed-save retry and stop between files');

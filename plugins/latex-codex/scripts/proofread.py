@@ -41,8 +41,8 @@ def document_start(source):
 
 
 def proofread_source(source, items, body_start=0, *, decorate=True):
-    if not isinstance(source, str) or not isinstance(items, list) or not 1 <= len(items) <= 100:
-        raise ValueError('校对预览需要源码和 1–100 处建议。')
+    if not isinstance(source, str) or not isinstance(items, list) or not 1 <= len(items) <= 1000:
+        raise ValueError('校对预览需要源码和 1–1000 处建议。')
     if any(not isinstance(item, dict) or type(item.get('start')) is not int for item in items):
         raise ValueError('校对选区无效。')
     cursor, parts, ranges, ids, line = 0, [], [], set(), 1

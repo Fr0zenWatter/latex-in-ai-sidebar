@@ -5,6 +5,7 @@ import binascii
 import difflib
 import gzip
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import hashlib
 import json
@@ -34,6 +35,7 @@ from project_review import ProjectReview, review_hunks
 from proofread import color_preamble, document_start, proofread_source
 from markdown_source import SOURCE_EXTENSIONS, document_type, markdown_resource
 from obsidian_tex import convert as note_to_tex, find_vault_root
+from native_drop import NativeDrop
 
 HISTORY_PDF_CACHE_BYTES = 256 * 1024 * 1024
 HISTORY_PDF_CACHE_DAYS = 30
@@ -320,7 +322,7 @@ main>section{min-width:0;min-height:0;display:flex;flex-direction:column;backgro
 <header id="app-toolbar"><button id="file-menu-button" class="icon-button" aria-label="文件" data-i18n-aria-label="文件" title="文件" data-i18n-title="文件" popovertarget="file-menu" aria-expanded="false"><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H5v20h14V7zM14 2v6h5"/></svg></button><button id="native-annotation-open" class="icon-button" disabled aria-pressed="false" aria-label="原生批注选区" data-i18n-aria-label="原生批注选区" title="原生批注选区" data-i18n-title="原生批注选区"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg></button><span id="status" role="status" aria-live="polite" data-i18n="正在打开…">正在打开…</span>
 <div id="file-drop-hint" hidden role="status" data-i18n="松开以打开 .tex 或 .md 文件">松开以打开 .tex 或 .md 文件</div>
 <span id="native-annotation-status" hidden role="status" aria-live="polite"><span data-i18n="按 Esc 返回编辑">按 Esc 返回编辑</span><span class="native-annotation-feedback" data-i18n="已保存批注可在主对话统一发送。" style="margin-left:8px">已保存批注可在主对话统一发送。</span></span>
-<button id="annotations-toggle" hidden popovertarget="annotations-review" aria-expanded="false">批注 · 0</button><button id="annotations-stop" hidden data-i18n="停止">停止</button><button id="annotations-send" hidden disabled aria-busy="false" title="发送全部批注" data-i18n-title="发送全部批注">Send</button>
+<button id="annotations-toggle" hidden popovertarget="annotations-review" aria-expanded="false">批注 · 0</button><button id="annotations-stop" hidden data-i18n="停止">停止</button><button id="annotations-send" hidden disabled aria-busy="false" title="发送当前文稿的全部批注" data-i18n-title="发送当前文稿的全部批注">Send</button>
 <button id="project-review-open" popovertarget="project-review-menu" hidden></button><button id="history-open" class="icon-button" disabled><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></svg><span data-i18n="历史">历史</span></button><button id="settings-menu-button" class="icon-button" popovertarget="settings-menu" aria-label="设置" data-i18n-aria-label="设置" title="设置" data-i18n-title="设置" aria-expanded="false"><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 3 1-2h4l1 2 2 1 2-.2 2 3-1 2v3l1 2-2 3-2-.2-2 1-1 3h-4l-1-3-2-1-2 .2-2-3 1-2V9L3 7l2-3 2 .2z" transform="translate(0 1) scale(1 .95)"/><circle cx="12" cy="11" r="3"/></svg></button></header>
 <div id="file-menu" class="toolbar-menu" popover="auto" aria-label="文件" data-i18n-aria-label="文件"><button id="open" data-i18n="打开文件">打开文件</button><button id="project-open" data-i18n="项目设置">项目设置</button><button id="reload" data-i18n="重新读取文件">重新读取文件</button><a href="/pdf" download="document.pdf" data-i18n="下载 PDF">下载 PDF</a></div>
 <dialog id="project-dialog" aria-labelledby="project-title"><h3 id="project-title" data-i18n="项目设置">项目设置</h3><form id="project-form"><label for="project-entry" data-i18n="主编译文件">主编译文件</label><div id="project-entry-row"><input id="project-entry" required placeholder="main.tex" aria-describedby="project-help"><button id="project-choose" type="button" data-i18n="选择文件">选择文件</button></div><p id="project-help" data-i18n="项目目录自动使用主编译文件所在目录；也可输入相对于当前项目的路径。">项目目录自动使用主编译文件所在目录；也可输入相对于当前项目的路径。</p><p id="project-error" role="alert"></p><div class="history-dialog-actions"><button id="project-cancel" type="button" data-i18n="取消">取消</button><button id="project-apply" type="submit" data-i18n="应用">应用</button></div></form></dialog>
@@ -345,7 +347,7 @@ main>section{min-width:0;min-height:0;display:flex;flex-direction:column;backgro
 <span style="color:var(--environment-command)">\end</span>{<span style="color:var(--environment)">equation</span>}
 <span style="color:var(--command)">\cite</span>{<span style="color:var(--reference)">example2026</span>}</pre><div class="theme-sample-capsule"><span data-i18n="询问 Codex…">询问 Codex…</span><span class="theme-sample-send" aria-hidden="true">↑</span></div></div>
 </div><div class="theme-dialog-actions"><button id="theme-save" disabled data-i18n="保存并使用">保存并使用</button></div></dialog>
-<main><section><div id="source-files"><button id="source-file" disabled aria-label="项目源码" data-i18n-aria-label="项目源码" aria-expanded="false" aria-controls="source-file-wheel"></button><div id="source-file-wheel" popover="auto"></div><button id="source-readonly" type="button" hidden disabled aria-pressed="false" aria-label="只读" data-i18n-aria-label="只读" title="C-x C-q"><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg></button><small id="inline-completion-status" role="status" aria-live="polite"></small></div><label id="filename" hidden for="source" data-i18n="LaTeX 源码">LaTeX 源码</label><textarea id="source" spellcheck="false" disabled aria-label="LaTeX 源码" data-i18n-aria-label="LaTeX 源码"></textarea><div id="proofread-bulk-actions"><button id="proofread-keep-all" type="button" class="proofread-navigation" aria-controls="source" hidden disabled aria-busy="false" title="接受当前文件的全部待确认校对修改" data-i18n-title="接受当前文件的全部待确认校对修改" data-i18n="全部接受">全部接受</button><button id="proofread-undo-all" type="button" class="proofread-navigation" aria-controls="source" hidden disabled aria-busy="false" title="撤销当前文件的全部待确认校对修改" data-i18n-title="撤销当前文件的全部待确认校对修改" data-i18n="全部 Undo">全部 Undo</button></div><button id="proofread-previous" class="proofread-navigation proofread-previous" type="button" hidden aria-controls="source"><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V4m-6 6 6-6 6 6"/></svg><span></span></button><button id="proofread-next" class="proofread-navigation proofread-next" type="button" hidden aria-controls="source"><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16m-6-6 6 6 6-6"/></svg><span></span></button></section>
+<main><section><div id="source-files"><button id="source-file" disabled aria-label="项目源码" data-i18n-aria-label="项目源码" aria-expanded="false" aria-controls="source-file-wheel"></button><div id="source-file-wheel" popover="auto"></div><button id="source-readonly" type="button" hidden disabled aria-pressed="false" aria-label="只读" data-i18n-aria-label="只读" title="C-x C-q"><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg></button><small id="inline-completion-status" role="status" aria-live="polite"></small></div><label id="filename" hidden for="source" data-i18n="LaTeX 源码">LaTeX 源码</label><textarea id="source" spellcheck="false" disabled aria-label="LaTeX 源码" data-i18n-aria-label="LaTeX 源码"></textarea><div id="proofread-bulk-actions"><button id="proofread-keep-all" type="button" class="proofread-navigation" aria-controls="source" hidden disabled aria-busy="false" title="接受当前文稿的全部待确认校对修改" data-i18n-title="接受当前文稿的全部待确认校对修改" data-i18n="全部接受">全部接受</button><button id="proofread-undo-all" type="button" class="proofread-navigation" aria-controls="source" hidden disabled aria-busy="false" title="撤销当前文稿的全部待确认校对修改" data-i18n-title="撤销当前文稿的全部待确认校对修改" data-i18n="全部 Undo">全部 Undo</button></div><button id="proofread-previous" class="proofread-navigation proofread-previous" type="button" hidden aria-controls="source"><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V4m-6 6 6-6 6 6"/></svg><span></span></button><button id="proofread-next" class="proofread-navigation proofread-next" type="button" hidden aria-controls="source"><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16m-6-6 6 6 6-6"/></svg><span></span></button></section>
 <div class="sync-rail"><div id="splitter" role="separator" tabindex="0" aria-label="调整 LaTeX 和 PDF 宽度" data-i18n-aria-label="调整 LaTeX 和 PDF 宽度" aria-orientation="vertical" aria-valuemin="15" aria-valuemax="85" aria-valuenow="50" title="拖动调整宽度 · 双击恢复各半" data-i18n-title="拖动调整宽度 · 双击恢复各半"></div><button id="forward" disabled aria-label="定位光标到 PDF" data-i18n-aria-label="定位光标到 PDF" title="跳到光标对应的 PDF 位置" data-i18n-title="跳到光标对应的 PDF 位置">→</button></div>
 <section><div class="pdf-toolbar"><div class="compile-group"><button id="compile" aria-busy="false" disabled><span class="compile-idle" data-i18n="保存并编译">保存并编译</span><span class="compile-busy" data-i18n="正在编译…">正在编译…</span></button><button id="compile-menu-button" popovertarget="compile-menu" aria-label="编译选项" data-i18n-aria-label="编译选项" title="编译选项" data-i18n-title="编译选项" aria-expanded="false"><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button></div><div id="compile-menu" class="toolbar-menu" popover="auto" aria-label="编译选项" data-i18n-aria-label="编译选项"><label for="auto-save"><span data-i18n="自动保存">自动保存</span><input id="auto-save" type="checkbox" aria-label="自动保存" data-i18n-aria-label="自动保存"></label><label for="auto-compile"><span data-i18n="自动编译">自动编译</span><input id="auto-compile" type="checkbox" checked disabled aria-label="自动编译" data-i18n-aria-label="自动编译" aria-describedby="auto-save-help"></label><small id="auto-save-help" data-i18n="自动编译需先开启自动保存。">自动编译需先开启自动保存。</small><label for="tex-engine"><span data-i18n="编译引擎">编译引擎</span><select id="tex-engine"><option value="auto" data-i18n="自动识别">自动识别</option><option value="pdflatex">pdfLaTeX</option><option value="xelatex">XeLaTeX</option></select></label><label for="miktex-install"><span data-i18n="允许 MiKTeX 自动补齐宏包">允许 MiKTeX 自动补齐宏包</span><input id="miktex-install" type="checkbox"></label><small data-i18n="开启后可下载缺失宏包，仅对本插件生效。">开启后可下载缺失宏包，仅对本插件生效。</small></div><button id="markdown-pdf-toggle" hidden aria-pressed="false" data-i18n="PDF 预览">PDF 预览</button><button id="log-toggle" aria-label="编译日志" data-i18n-aria-label="编译日志" title="编译日志" data-i18n-title="编译日志" aria-pressed="false" aria-controls="log"><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 2H5v20h14V7zM14 2v6h5M8 12h8M8 16h8"/></svg></button><button id="open-folder" type="button" disabled aria-label="打开当前文件夹" data-i18n-aria-label="打开当前文件夹" title="打开当前文件夹" data-i18n-title="打开当前文件夹"><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Zm0 0h18"/></svg></button><span id="pan-hint" role="status" hidden data-i18n="空格拖动 · Alt + 空格缩放">空格拖动 · Alt + 空格缩放</span><button id="pan-mode" aria-pressed="false" title="切换拖动页面与选择文字" data-i18n-title="切换拖动页面与选择文字" ><svg class="toolbar-icon pan-hand-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 11V7a2 2 0 0 0-4 0v3M14 10V5a2 2 0 0 0-4 0v6M10 10.5V7a2 2 0 0 0-4 0v5l-1-1a2 2 0 0 0-3 2l4 6a6 6 0 0 0 5 3h3a6 6 0 0 0 6-6v-3a2 2 0 0 0-4 0v1"/></svg><svg class="toolbar-icon pan-select-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m4 3 15 10-7 1-4 7Z"/></svg><span id="pan-label" data-i18n="选字">选字</span></button><button id="zoom-fit" aria-label="PDF 缩放" aria-expanded="false" aria-controls="pdf-zoom-dial">100%</button><div id="pdf-zoom-dial" popover="manual" role="slider" tabindex="0" aria-label="PDF 缩放" aria-orientation="horizontal" aria-valuemin="30" aria-valuemax="500" aria-valuenow="100" aria-controls="preview"><div class="pdf-zoom-face"><svg class="pdf-zoom-arc" viewBox="0 0 240 240" aria-hidden="true"><path d="M 50 0 A 190 190 0 0 0 240 190"/></svg><div class="pdf-zoom-rotor" aria-hidden="true"></div><span class="pdf-zoom-indicator" aria-hidden="true"></span></div></div></div><div class="preview-shell"><div id="preview" role="region" aria-label="编译后的 PDF" data-i18n-aria-label="编译后的 PDF" tabindex="0"><div id="pdf-viewer" class="pdfViewer"></div></div><div id="markdown-preview" hidden role="region" aria-label="Markdown 预览" data-i18n-aria-label="Markdown 预览" tabindex="0"></div><nav id="pdf-outline" aria-label="章节目录" data-i18n-aria-label="章节目录" hidden></nav><button id="pdf-proofread-previous" class="proofread-navigation proofread-previous" type="button" hidden aria-controls="preview"><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V4m-6 6 6-6 6 6"/></svg><span></span></button><button id="pdf-proofread-next" class="proofread-navigation proofread-next" type="button" hidden aria-controls="preview"><svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16m-6-6 6 6 6-6"/></svg><span></span></button><div id="log" hidden tabindex="0" role="region" aria-label="编译日志" data-i18n-aria-label="编译日志"><button id="log-jump" type="button" hidden></button><button id="compile-install" type="button" hidden data-i18n="允许自动补包并重新编译">允许自动补包并重新编译</button><pre id="log-text"></pre></div></div></section></main>
 <div id="chat-panel" role="dialog" aria-label="项目浮动对话" data-i18n-aria-label="项目浮动对话" hidden>
@@ -400,7 +402,7 @@ import {attachMathHover,findMathRanges,documentMacros} from '/vendor/latex-hover
 import {attachSelectionChat} from '/vendor/latex-chat.mjs';
 import {attachSourceQuotes} from '/vendor/latex-references.mjs';
 import {attachProjectReview} from '/vendor/latex-project-review.mjs';
-import {attachProofreadPdf, paintProofreadActions, proofreadPdfPositions} from '/vendor/latex-proofread-pdf.mjs';
+import {attachProofreadPdf, paintProofreadActions, proofreadPdfPositions, locateProofreadSource} from '/vendor/latex-proofread-pdf.mjs';
 import {attachProofreadNavigation} from '/vendor/latex-proofread.mjs';
 import {attachNativeAnnotations} from '/vendor/latex-native-annotations.mjs';
 import {attachHistory} from '/vendor/latex-history.mjs';
@@ -483,14 +485,29 @@ sourceWrapper.addEventListener('wheel',event=>{
   editor.scrollTo(scroll.left,scroll.top+editor.charCoords(anchor,'window').top-top);
 },{passive:false});
 document.querySelector('main').append(document.querySelector('#chat-panel'));
-let proofreadPdf=null,normalPdfData=null,pdfRenderGeneration=0,projectReview=null,selectionChat=null,acceptingAll=false,localReviewItems=[],localReviewEdit=null;
+let proofreadPdf=null,normalPdfData=null,pdfRenderGeneration=0,projectReview=null,selectionChat=null,acceptingAll=false,switchingSource=false,localReviewItems=[],localReviewEdit=null,articleSourceOrder=[];
+function allProofreadItems(){
+  const local=(selectionChat?.allItems||localReviewItems).map(item=>{
+    const file=item.path||document.querySelector('#filename').title;
+    return Object.assign(item,{path:file,fileName:item.fileName||(file?.startsWith(projectRoot)?file.slice(projectRoot.length).replace(/^[\\/]/,'').replaceAll('\\','/'):file?.split(/[\\/]/).pop())});
+  });
+  return [...local,...(projectReview?.allItems||projectReview?.items||[])];
+}
 const editorReviewNavigation=attachProofreadNavigation({button:document.querySelector('#proofread-next'),
   previous:document.querySelector('#proofread-previous'),
-  positions:()=>preferences.getItem('latex-codex-proofread-editor')==='off'?[]:
-    [...localReviewItems,...(projectReview?.items||[])].flatMap(item=>{
+  positions:()=>{
+    if(preferences.getItem('latex-codex-proofread-editor')==='off')return [];
+    const local=allProofreadItems().flatMap(item=>{
       const pos=item.marker?.find();
       return item.review&&pos&&item.doc===editor.getDoc()?[editor.charCoords(pos.from,'local').top]:[];
-    }),
+    });
+    const order=articleSourceOrder.length?articleSourceOrder:projectReview?.sourceOrder||[],current=order.indexOf(document.querySelector('#filename').title);
+    const remote=allProofreadItems().flatMap(item=>{
+      const rank=order.indexOf(item.path);
+      return item.review&&current>=0&&rank>=0&&rank!==current?[{direction:rank<current?'above':'below',order:rank,offset:item.start,navigate:()=>item.projectReview?projectReview.navigate(item):selectionChat.navigate(item)}]:[];
+    });
+    return [...local,...remote];
+  },
   top:()=>editor.getScrollInfo().top,
   bottom:()=>{const scroll=editor.getScrollInfo();return scroll.top+scroll.clientHeight;},
   scroll:top=>editor.scrollTo(null,top),
@@ -498,7 +515,7 @@ const editorReviewNavigation=attachProofreadNavigation({button:document.querySel
 const pdfReviewNavigation=attachProofreadNavigation({button:document.querySelector('#pdf-proofread-next'),
   previous:document.querySelector('#pdf-proofread-previous'),
   positions:()=>proofreadPdf?.active?proofreadPdfPositions(pdfViewer,proofreadPdf.data,
-    [...localReviewItems,...(projectReview?.items||[])],pdfBuild):[],
+    allProofreadItems(),pdfBuild):[],
   top:()=>preview.scrollTop,
   bottom:()=>preview.scrollTop+preview.clientHeight,
   scroll:top=>preview.scrollTo({top,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'}),
@@ -509,43 +526,42 @@ new ResizeObserver(editorReviewNavigation.update).observe(editor.getWrapperEleme
 new ResizeObserver(pdfReviewNavigation.update).observe(preview);
 for(const name of ['pagesinit','pagerendered','updateviewarea'])pdfEvents.on(name,pdfReviewNavigation.update);
 selectionChat=attachSelectionChat(editor,request,paintPdfAnnotations,saveAnnotationChange,
-  ()=>documentType==='latex'?(document.querySelector('#filename').title===mainFile?editor.getValue():mainSource||editor.getValue()):'',()=>sourceQuotes.enabled);
+  ()=>documentType==='latex'?(document.querySelector('#filename').title===mainFile?editor.getValue():mainSource||editor.getValue()):'',()=>sourceQuotes.enabled,
+  {capture:()=>({path:document.querySelector('#filename').title,version}),open:(path,batch)=>switchSource(path,false,batch)});
 projectReview=attachProjectReview({editor,request,
-  capture:()=>({path:document.querySelector('#filename').title,doc:editor.getDoc(),source:editor.getValue(),clean:!!version&&!busy&&!syncBusy&&!conflict&&editor.getValue()===saved}),
+  capture:()=>({path:document.querySelector('#filename').title,doc:editor.getDoc(),source:editor.getValue(),version,mainFile,projectRoot,clean:!!version&&!busy&&!syncBusy&&!conflict&&editor.getValue()===saved}),
   adopt:adoptProjectSource,open:switchSource,message:text=>status.textContent=text,
   changed:()=>paintPdfAnnotations(localReviewItems,localReviewEdit),
 });
 function updateAcceptAll(){
-  const count=localReviewItems.filter(item=>item.review).length+(projectReview?.items.length||0);
+  const reviews=allProofreadItems().filter(item=>item.review),count=reviews.length;
   for(const id of ['#proofread-keep-all','#proofread-undo-all']){
     const button=document.querySelector(id);
     button.hidden=!count;
     button.disabled=!count||acceptingAll||busy||syncBusy||conflict||editor.getOption('readOnly')||selectionChat?.busy||projectReview?.busy
-      ||!!projectReview?.items.length&&editor.getValue()!==saved;
+      ||reviews.some(item=>item.projectReview)&&editor.getValue()!==saved;
     button.setAttribute('aria-busy',String(acceptingAll));
   }
 }
 async function resolveAllProofread(action){
   updateAcceptAll();
   if(document.querySelector(action==='keep'?'#proofread-keep-all':'#proofread-undo-all').disabled)return;
-  acceptingAll=true;updateAcceptAll();
+  acceptingAll=true;updateSyncControls();
   try{
-    if(localReviewItems.some(item=>{
-      if(!item.review)return false;
+    if(action==='keep'&&allProofreadItems().some(item=>{
+      if(!item.review||item.projectReview)return false;
       const pos=item.marker?.find();
-      return !pos||item.doc!==editor.getDoc()||editor.getRange(pos.from,pos.to)!==item.original;
+      return !pos||(item.doc===editor.getDoc()?editor.getRange(pos.from,pos.to):item.doc.getRange(pos.from,pos.to))!==item.original;
     }))throw new Error(t('批注选区已变化，未应用任何修改。批注已保留。'));
     if(action==='keep'){
-      await projectReview.keepAll();
-      await selectionChat.keepAll();
-      setText(status,'已接受当前文件的全部校对修改。');
+      if(await projectReview.keepAll()===false||await selectionChat.keepAll()===false)return;
+      setText(status,'已接受当前文稿的全部校对修改。');
     }else{
-      await projectReview.undoAll();
-      selectionChat.undoAll();
-      setText(status,'已撤销当前文件的全部待确认校对修改。');
+      if(await projectReview.undoAll()===false||await selectionChat.undoAll()===false)return;
+      setText(status,'已撤销当前文稿的全部待确认校对修改。');
     }
   }catch(error){status.textContent=error.message;}
-  finally{acceptingAll=false;updateAcceptAll();}
+  finally{acceptingAll=false;updateSyncControls();}
 }
 document.querySelector('#proofread-keep-all').onclick=()=>resolveAllProofread('keep');
 document.querySelector('#proofread-undo-all').onclick=()=>resolveAllProofread('undo');
@@ -841,6 +857,7 @@ const sourceFile=document.querySelector('#source-file'),projectDialog=document.q
 const sourcePicker=mountSourceWheel({button:sourceFile,popup:document.querySelector('#source-file-wheel'),translate:t,onSelect:switchSource});
 let sourcePickerState='';
 function updateSourcePicker(data){
+  if(data.source_order){articleSourceOrder=data.source_order;editorReviewNavigation.update();}
   const state={files:data.files||[{path:data.path,name:data.name}],path:data.path,mainFile:data.main_file||data.path};
   const signature=JSON.stringify(state);
   if(signature===sourcePickerState)return;
@@ -895,14 +912,14 @@ logJump.onclick=async()=>{
   editor.setCursor(cursor);editor.focus();editor.scrollIntoView(cursor,editor.getScrollInfo().clientHeight/2);
 };
 function updateSyncControls(){
-  updateAcceptAll();const disabled=busy||syncBusy||sourceLocked||(editor.getOption('readOnly')&&!emacsReadOnly);
-  forwardButton.disabled=disabled||!!proofreadPdf?.active;compileButton.disabled=disabled;logJump.disabled=disabled||conflict;openButton.disabled=busy||syncBusy;sourcePicker.setDisabled(!!disabled);document.querySelector('#project-open').disabled=!!disabled;document.querySelector('#history-open').disabled=!!disabled;
+  updateAcceptAll();const disabled=acceptingAll||busy||syncBusy||sourceLocked||(editor.getOption('readOnly')&&!emacsReadOnly);
+  forwardButton.disabled=disabled||!!proofreadPdf?.active;compileButton.disabled=disabled;logJump.disabled=disabled||conflict;openButton.disabled=acceptingAll||busy||syncBusy;sourcePicker.setDisabled(!!disabled);document.querySelector('#project-open').disabled=!!disabled;document.querySelector('#history-open').disabled=!!disabled;
   texEngine.disabled=!!disabled||documentType==='markdown';texInstaller.disabled=!!disabled;compileInstall.disabled=!!disabled;
   const readOnlyButton=document.querySelector('#source-readonly');
   readOnlyButton.disabled=!!disabled||conflict||!version;readOnlyButton.setAttribute('aria-pressed',String(emacsReadOnly));
 }
 proofreadPdf=attachProofreadPdf({request,
-  capture:()=>({latex:documentType==='latex',enabled:preferences.getItem('latex-codex-proofread-pdf')!=='off',path:document.querySelector('#filename').title,version,source:editor.getValue(),doc:editor.getDoc(),range:(from,to)=>editor.getRange(from,to),index:pos=>editor.indexFromPos(pos)}),
+  capture:()=>({latex:documentType==='latex',enabled:preferences.getItem('latex-codex-proofread-pdf')!=='off',path:document.querySelector('#filename').title,version,mainFile,projectRoot,source:editor.getValue(),doc:editor.getDoc(),range:(from,to)=>editor.getRange(from,to),index:pos=>editor.indexFromPos(pos)}),
   display:async(data,current)=>{const displayed=await refreshPreview(data,current);if(displayed!==false&&current()){pdfVersion='';compiledLabels={};compiledCitations={};showCompileLog(false);updateSyncControls();selectionChat.refreshAnnotations();}return displayed;},
   restore:async current=>{if(normalPdfData&&await refreshPreview(normalPdfData,current)!==false&&current()){pdfVersion=normalPdfData.sync&&normalPdfData.version===version&&editor.getValue()===saved?version:'';compiledLabels=pdfVersion?normalPdfData.labels||{}:{};compiledCitations=pdfVersion?normalPdfData.citations||{}:{};setText(status,'已恢复正式 PDF。');updateSyncControls();selectionChat.refreshAnnotations();}},
   message:(key,values)=>{setText(status,key,values);updateSyncControls();},
@@ -936,12 +953,12 @@ async function saveAnnotationChange(source,change){
     throw e;
   }finally{busy=false;setSourceReadOnly(false);updateSyncControls();}
 }
-function display(data,preservePdf=false){
+function display(data,preservePdf=false,preserveAnnotations=false){
   if(data.main_file&&mainFile&&data.main_file!==mainFile)autoCompilePaused=false;
   editor.state.englishProjectWords=data.project_words||[];
   texEngine.value=['auto','pdflatex','xelatex'].includes(data.engine_choice)?data.engine_choice:'auto';
   texInstaller.checked=!!data.allow_installer;compileInstall.hidden=true;
-  proofreadPdf.invalidate();
+  if(!preservePdf||!preserveAnnotations||data.main_file!==mainFile||data.project_root!==projectRoot)proofreadPdf.invalidate();
   normalPdfData=preservePdf&&normalPdfData?{...normalPdfData,version:data.version,sync:data.sync,labels:data.labels,citations:data.citations}:null;
   showCompileError(null);showCompileLog(false);
   if(data.path!==document.querySelector('#filename').title)markdownPdf=false;
@@ -949,17 +966,22 @@ function display(data,preservePdf=false){
   const markdown=documentType==='markdown';document.body.dataset.documentType=documentType;
   editor.setOption('mode',markdown?'obsidian-md':'text/x-stex');
   editor.setOption('screenReaderLabel',t(markdown?'Markdown 源码':'LaTeX 源码'));
-  pdfBoxSelection.clear();
+  if(!syncBusy||!preservePdf)pdfBoxSelection.clear();
   mainSource=data.main_source||'';mathHover.setMainSource(mainSource);
   const text=data.source.replace(/\r\n/g,'\n');
-  editor.setOption('keyMap','default');editor.swapDoc(new CodeMirror.Doc(text,editor.getOption('mode')));editor.setOption('keyMap',editorMode.value);
-  saved=text;version=data.version;pdfVersion=preservePdf&&data.sync&&data.pdf_revision===pdfBuild?version:'';compiledLabels=pdfVersion?data.labels||{}:{};compiledCitations=pdfVersion?data.citations||{}:{};setSourceReadOnly(false);conflict=false;updateSyncControls();
+  const createDoc=()=>new CodeMirror.Doc(text,editor.getOption('mode'));
+  const retained=selectionChat.sourceDocument?.(data,createDoc,preserveAnnotations);
+  editor.setOption('keyMap','default');editor.swapDoc(retained?.doc||createDoc());editor.setOption('keyMap',editorMode.value);
+  saved=text;version=data.version;conflict=!!retained?.conflict;pdfVersion=!conflict&&preservePdf&&data.sync&&data.pdf_revision===pdfBuild?version:'';compiledLabels=pdfVersion?data.labels||{}:{};compiledCitations=pdfVersion?data.citations||{}:{};setSourceReadOnly(false);updateSyncControls();
   const label=document.querySelector('#filename');label.dataset.name=data.name;label.title=data.path;updateCompileCaption();
   document.querySelector('#open-folder').disabled=false;
   projectRoot=data.project_root||'';mainFile=data.main_file||data.path;projectVersion=data.project_version||'';
+  articleSourceOrder=data.source_order||[];
   updateSourcePicker(data);
   configurePreview();
   if(markdown){markdownPreview.clear();markdownPreview.render(text);}
+  selectionChat.activateSource?.();
+  if(conflict)setText(status,'文件已被外部修改；保留了编辑框内容，请先处理冲突');
 }
 function configurePreview(){
   const live=markdownLive();
@@ -987,20 +1009,25 @@ async function sourceRequest(route,payload){
   if(dialog.returnValue!=='open')return {cancelled:true};
   return sourceRequest(route,{...payload,path:data.path,main_file:select.value});
 }
-async function switchSource(path,initialize=true){
+async function switchSource(path,initialize=true,batch=null){
   if(path===document.querySelector('#filename').title)return true;
-  if(busy||conflict||selectionChat.busy||selectionChat.hasAnnotations){setText(status,'请先保存修改、处理冲突，并发送或清空批注及对话草稿，再切换源码。');return false;}
-  if(editor.getValue()!==saved)await compile(false);
+  if(busy||switchingSource||conflict||((acceptingAll||selectionChat.busy)&&!selectionChat.isBatchSwitch?.(batch))||(selectionChat.prepareSourceSwitch?!selectionChat.prepareSourceSwitch(batch):selectionChat.hasAnnotations)){setText(status,'请先保存修改、处理冲突，并发送或清空批注及对话草稿，再切换源码。');return false;}
+  if(editor.getValue()!==saved)await compile(false,false,batch);
   if(conflict||editor.getValue()!==saved)return false;
-  clearTimeout(timer);busy=true;setSourceReadOnly('nocursor');updateSyncControls();let switched=false;
+  clearTimeout(timer);busy=true;switchingSource=true;setSourceReadOnly('nocursor');updateSyncControls();let switched=false;
   try{
-    const data=await sourceRequest('/source',{path,version});
+    const data=await sourceRequest('/source',{path,version,...(selectionChat.hasAnnotations?{annotation_main_file:mainFile}:{})});
     if(data.cancelled){setText(status,'已取消打开');return false;}
     const sameMain=(data.main_file||mainFile)===mainFile&&(data.project_root||projectRoot)===projectRoot;
-    display(data,sameMain);if(!sameMain)await clearPreview();switched=true;return true;
+    display(data,sameMain,sameMain);if(!sameMain)await clearPreview();switched=true;return !conflict;
   }
   catch(e){setText(status,'打开失败：{message}',{message:e.message});return false;}
-  finally{busy=false;setSourceReadOnly(false);updateSyncControls();if(switched&&initialize&&!pdfVersion&&!conflict&&!autoCompilePaused)await compile(true,true);}
+  finally{
+    busy=false;setSourceReadOnly('nocursor');updateSyncControls();
+    try{if(switched)await projectReview.refresh();}
+    finally{switchingSource=false;setSourceReadOnly(false);updateSyncControls();selectionChat.refreshAnnotations();}
+    if(switched&&initialize&&!pdfVersion&&!proofreadPdf.active&&!conflict&&!autoCompilePaused)await compile(true,true);
+  }
 }
 document.querySelector('#project-open').onclick=()=>{document.querySelector('#file-menu').hidePopover();document.querySelector('#project-entry').value=mainFile;document.querySelector('#project-error').textContent='';projectDialog.showModal();};
 document.querySelector('#project-cancel').onclick=()=>projectDialog.close();
@@ -1028,11 +1055,21 @@ document.querySelector('#project-form').onsubmit=async event=>{
 };
 async function clearPreview(){endSpacePan();pdfOutline.clear();pdfViewer.setDocument(null);pdfLinks.setDocument(null);if(pdfTask)await pdfTask.destroy();pdfTask=null;pdfBuild='';logText.textContent='';showCompileError(null);}
 async function openFile(selection={}){
-  if(busy||syncBusy)return;
+  if(acceptingAll||busy||syncBusy)return;
   if((editor.getValue()!==saved||selectionChat.hasAnnotations)&&!confirm(t(selectionChat.hasAnnotations?'打开其他文件会放弃未发送批注、对话草稿和未保存修改。继续？':'打开其他文件会放弃尚未保存的修改。继续？')))return;
   clearTimeout(timer);busy=true;setSourceReadOnly('nocursor');updateSyncControls();let opened=false;
   setText(status,Object.keys(selection).length?'正在打开拖入的文件…':'请在系统窗口中选择 .tex 或 .md 文件…');
   try{
+    if(selection.droppedFile){
+      const file=selection.droppedFile,dropped={name:file.name};
+      try{
+        if(globalThis.crypto?.subtle&&file.arrayBuffer&&Number.isSafeInteger(file.size)){
+          const digest=await crypto.subtle.digest('SHA-256',await file.arrayBuffer());
+          dropped.sha256=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');dropped.size=file.size;
+        }
+      }catch{} // A browser that cannot read the file falls back to the native picker.
+      selection={dropped_file:dropped};
+    }
     const data=await sourceRequest('/open',selection);
     if(data.cancelled)setText(status,'已取消打开');
     else{const sameProject=data.project_root===projectRoot&&data.main_file===mainFile;display(data,sameProject);if(!sameProject)await clearPreview();opened=true;}
@@ -1043,28 +1080,70 @@ async function openFile(selection={}){
 }
 const dropArea=document.querySelector('main'),dropHint=document.querySelector('#file-drop-hint');
 let dropDepth=0;
+let nativeDrag=null,nativeDropAvailable=document.documentElement.dataset.nativeDrop==='on';
+async function consumeNativeDrop(gesture,data){
+  if(data.status!=='dropped'&&data.reason!=='released')return false;
+  if(gesture.doc!==editor.getDoc()||gesture.path!==document.querySelector('#filename').title){setText(status,'当前文件已切换，请重新拖入。');return true;}
+  if(data.reason==='released'){await openFile();return true;}
+  if(!Array.isArray(data.files)||data.files.length!==1||!(/\.(tex|md|markdown)$/i).test(data.files[0])){
+    setText(status,'一次只能拖入一个 .tex、.md 或 .markdown 文件。');return true;
+  }
+  await openFile({path:data.files[0]});return true;
+}
+function pollNativeDrop(gesture,delay=80){
+  gesture.timer=setTimeout(async()=>{
+    if(nativeDrag!==gesture)return;
+    try{
+      const data=await request('/native-drop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'status',id:gesture.id})});
+      if(nativeDrag!==gesture)return;
+      if(data.status==='ready'||data.status==='pending'){pollNativeDrop(gesture);return;}
+      if((data.status==='dropped'||data.reason==='released')&&(busy||syncBusy)){pollNativeDrop(gesture,250);return;}
+      nativeDrag=null;dropDepth=0;dropHint.hidden=true;await consumeNativeDrop(gesture,data);
+    }catch(e){if(nativeDrag===gesture){nativeDrag=null;dropDepth=0;dropHint.hidden=true;setText(status,'打开失败：{message}',{message:e.message});}}
+  },delay);
+}
+async function startNativeDrop(event){
+  if(!nativeDropAvailable||nativeDrag||!event.isTrusted||busy||syncBusy||!globalThis.crypto?.randomUUID)return;
+  const rect=dropArea.getBoundingClientRect(),area={x:event.clientX-rect.left,y:event.clientY-rect.top,width:rect.width,height:rect.height,scale:window.devicePixelRatio||1};
+  if(!Object.values(area).every(Number.isFinite)||area.x<0||area.y<0||area.x>area.width||area.y>area.height)return;
+  const gesture={id:crypto.randomUUID().replaceAll('-',''),doc:editor.getDoc(),path:document.querySelector('#filename').title};nativeDrag=gesture;
+  try{
+    const data=await request('/native-drop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'arm',id:gesture.id,area})});
+    if(nativeDrag!==gesture){request('/native-drop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'cancel',id:gesture.id})}).catch(()=>{});return;}
+    if(data.status==='ready'||data.status==='pending'||((data.status==='dropped'||data.reason==='released')&&(busy||syncBusy))){pollNativeDrop(gesture);return;}
+    nativeDrag=null;
+    if(data.status==='dropped'||data.status==='cancelled'){dropDepth=0;dropHint.hidden=true;}
+    if(data.status==='unavailable')nativeDropAvailable=false;await consumeNativeDrop(gesture,data);
+  }catch{if(nativeDrag===gesture)nativeDrag=null;nativeDropAvailable=false;}
+}
+async function stopNativeDrop(){
+  const gesture=nativeDrag;if(!gesture)return null;
+  nativeDrag=null;dropDepth=0;dropHint.hidden=true;clearTimeout(gesture.timer);
+  try{return {gesture,data:await request('/native-drop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'cancel',id:gesture.id})})};}catch{return null;}
+}
 const hasDroppedFiles=event=>Array.from(event.dataTransfer?.types||[]).includes('Files');
 dropArea.addEventListener('dragenter',event=>{
   if(!hasDroppedFiles(event))return;
-  event.preventDefault();event.stopPropagation();dropDepth++;dropHint.hidden=false;
+  event.preventDefault();event.stopPropagation();dropDepth++;dropHint.hidden=false;startNativeDrop(event);
 },true);
 dropArea.addEventListener('dragover',event=>{
   if(!hasDroppedFiles(event))return;
-  event.preventDefault();event.stopPropagation();event.dataTransfer.dropEffect='link';
+  event.preventDefault();event.stopPropagation();event.dataTransfer.dropEffect='link';startNativeDrop(event);
 },true);
 dropArea.addEventListener('dragleave',event=>{
   if(!hasDroppedFiles(event))return;
   event.stopPropagation();
-  if(--dropDepth<=0){dropDepth=0;dropHint.hidden=true;}
+  if(--dropDepth<=0){dropDepth=0;dropHint.hidden=!nativeDrag;}
 },true);
 dropArea.addEventListener('drop',async event=>{
   if(!hasDroppedFiles(event))return;
   event.preventDefault();event.stopPropagation();dropDepth=0;dropHint.hidden=true;
   const files=Array.from(event.dataTransfer.files||[]);
   if(files.length!==1||!(/\.(tex|md|markdown)$/i).test(files[0].name)){
+    stopNativeDrop();
     setText(status,'一次只能拖入一个 .tex、.md 或 .markdown 文件。');return;
   }
-  if(busy||syncBusy)return;
+  if(busy||syncBusy){stopNativeDrop();return;}
   const file=files[0];
   let path=file.path;
   if(typeof path!=='string'||!/^(?:[a-z]:[\\/]|\\\\|\/)/i.test(path)){
@@ -1080,16 +1159,17 @@ dropArea.addEventListener('drop',async event=>{
       }
     }catch{path='';}
   }
-  // shortcut: Browsers may hide local paths; leave the original closed when they do.
+  const native=await stopNativeDrop();if(native&&await consumeNativeDrop(native.gesture,native.data))return;
   if(typeof path!=='string'||path.split(/[\\/]/).pop()!==file.name){
-    setText(status,'浏览器未提供原始路径，请使用“文件 → 打开文件”。');return;
+    await openFile({droppedFile:file});return;
   }
   await openFile({path});
 },true);
 window.addEventListener('blur',()=>{dropDepth=0;dropHint.hidden=true;});
-async function compile(compilePdf=true,automatic=false){
+window.addEventListener('pagehide',()=>{stopNativeDrop();});
+async function compile(compilePdf=true,automatic=false,batch=null){
   compilePdf=compilePdf!==false&&!markdownLive();
-  clearTimeout(timer);if(busy||conflict||sourceLocked||(editor.getOption('readOnly')&&!emacsReadOnly))return;
+  clearTimeout(timer);if((acceptingAll&&!selectionChat.isBatchSwitch?.(batch))||busy||conflict||sourceLocked||(editor.getOption('readOnly')&&!emacsReadOnly))return;
   if(compilePdf&&!automatic){autoCompilePaused=false;updateCompileCaption();}
   if(automatic&&autoCompilePaused)compilePdf=false;
   busy=true;compileButton.setAttribute('aria-busy',String(compilePdf));updateSyncControls();const text=editor.getValue(),changed=text!==saved;setText(status,compilePdf?'正在保存并编译…':'正在保存…');
@@ -1166,6 +1246,26 @@ async function refreshPreview(data,isCurrent=()=>true){
   }
   if(previous)await previous.destroy();
 }
+async function syncCompiledPdf(data){
+  const path=document.querySelector('#filename').title,doc=editor.getDoc(),revision=version,text=saved;
+  if(data.path!==path||data.version!==revision||data.main_file!==mainFile||data.project_root!==projectRoot)return false;
+  if(data.sync!==true||!data.pdf_revision){
+    pdfVersion='';compiledLabels={};compiledCitations={};
+    if(normalPdfData)normalPdfData={...normalPdfData,sync:false};
+    updateSyncControls();return false;
+  }
+  normalPdfData={...data,outline:data.outline||normalPdfData?.outline||[]};
+  if(proofreadPdf.active||conflict||editor.getValue()!==saved){pdfVersion='';compiledLabels={};compiledCitations={};updateSyncControls();return false;}
+  const current=()=>editor.getDoc()===doc&&version===revision&&saved===text&&document.querySelector('#filename').title===path&&!proofreadPdf.active;
+  const changed=pdfBuild!==data.pdf_revision;
+  pdfVersion='';compiledLabels={};compiledCitations={};
+  if(await refreshPreview(data,current)===false||!current())return false;
+  if(editor.getValue()!==saved){updateSyncControls();return false;}
+  pdfVersion=revision;compiledLabels=data.labels||{};compiledCitations=data.citations||{};
+  if(data.project_version)projectVersion=data.project_version;
+  if(changed)setText(status,'已同步最新 PDF，可继续定位。');
+  updateSyncControls();selectionChat.refreshAnnotations();return true;
+}
 async function adoptProjectSource(data){
   if(data.path!==document.querySelector('#filename').title||editor.getValue()!==saved)
     throw new Error(t('请先保存编辑草稿，再处理项目校对。'));
@@ -1183,18 +1283,21 @@ async function adoptProjectSource(data){
   selectionChat.refreshAnnotations();
 }
 async function load(force=false){
-  if(loading||busy||syncBusy||historyDialog.open)return;
+  if(loading||acceptingAll||busy||syncBusy||historyDialog.open)return;
   if(force&&(editor.getValue()!==saved||selectionChat.hasAnnotations)&&!confirm(t(selectionChat.hasAnnotations?'重新读取会放弃未发送批注、对话草稿和未保存修改。继续？':'重新读取会放弃编辑框中尚未保存的修改。继续？')))return;
   loading=true;
   try{
     const data=await request('/state');
-    if(busy||syncBusy||historyDialog.open)return;
+    if(acceptingAll||busy||syncBusy||historyDialog.open)return;
     mainSource=data.main_source||'';mathHover.setMainSource(mainSource);
     if(data.path===document.querySelector('#filename').title&&data.project_root===projectRoot&&data.main_file===mainFile){
       editor.state.englishProjectWords=data.project_words||[];updateSourcePicker(data);
     }
     if(!force&&version&&data.version===version){
-      if(data.project_version&&data.project_version!==projectVersion){projectVersion=data.project_version;pdfVersion='';compiledLabels={};compiledCitations={};showCompileError(null);if(automaticCompilation())await compile(true,true);else setText(status,'项目文件已变化，请重新编译后定位。');}
+      const changed=data.project_version&&data.project_version!==projectVersion;
+      if(changed){projectVersion=data.project_version;pdfVersion='';compiledLabels={};compiledCitations={};showCompileError(null);}
+      const synced=await syncCompiledPdf(data);
+      if(changed&&!synced){if(automaticCompilation())await compile(true,true);else setText(status,'项目文件已变化，请重新编译后定位。');}
       return;
     }
     if(!force&&version&&data.path===document.querySelector('#filename').title&&editor.getValue()===saved&&preferences.getItem('latex-codex-proofread-project')==='on'){
@@ -1213,12 +1316,26 @@ async function syncRequest(data){
   if(pdfViewer.pdfDocument!==pdf||pdfBuild!==data.pdf_revision)throw new Error(t('PDF 或源码已变化，请重新选择 PDF 文字。'));
   return request('/synctex',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data,boxes})});
 }
-async function synchronize(direction,position,quiet=false,isCurrent=()=>true){
+async function synchronize(direction,position,quiet=false,isCurrent=()=>true,retry=true){
   if(markdownLive()){if(direction==='forward')markdownPreview.locate();return;}
-  if(proofreadPdf.active){if(!quiet)setText(status,'请先处理 PDF 校对建议，再进行源码定位。');return;}
+  if(proofreadPdf.active){
+    if(direction!=='backward'){if(!quiet)setText(status,'请先处理 PDF 校对建议，再进行源码定位。');return;}
+    if(syncBusy||busy||acceptingAll||selectionChat.busy)return;
+    syncBusy=true;updateSyncControls();
+    try{
+      if(conflict)throw new Error(t('请先处理文件冲突。'));
+      const result=await locateProofreadSource({viewer:pdfViewer,preview:proofreadPdf,position,request,isCurrent,
+        capture:()=>({path:document.querySelector('#filename').title,version,source:editor.getValue(),doc:editor.getDoc(),mainFile,projectRoot,pdfRevision:pdfBuild}),
+        open:path=>switchSource(path,false),focus:pos=>{editor.setCursor(pos);editor.focus();editor.scrollIntoView(pos,editor.getScrollInfo().clientHeight/2);},
+      });
+      if(result)setText(status,'已定位到源码第 {line} 行',result);
+    }catch(error){if(!quiet)setText(status,'定位失败：{message}',{message:t(error.message)});}
+    finally{syncBusy=false;updateSyncControls();}
+    return;
+  }
   if(syncBusy)return;
   if(busy){if(direction==='forward'&&!editor.getOption('readOnly'))pendingForward=true;return;}
-  syncBusy=true;updateSyncControls();
+  syncBusy=true;updateSyncControls();let retryForward=false;
   try{
     if(conflict)throw new Error(t('请先处理文件冲突。'));
     if(direction==='forward'&&(editor.getValue()!==saved||!pdfVersion)&&!autoCompilePaused)await compile(true,true);
@@ -1227,15 +1344,13 @@ async function synchronize(direction,position,quiet=false,isCurrent=()=>true){
     if(direction==='forward'&&!quiet)showCompileLog(false);
     let revision=version;const build=pdfBuild;
     if(direction==='forward'){const cursor=editor.getCursor();position={line:cursor.line+1,column:cursor.ch+1};}
-    const locate=point=>syncRequest({direction:direction==='selection'?'backward':direction,version:revision,pdf_revision:build,...point});
-    const results=direction==='selection'?await Promise.allSettled(position.points.map(locate)):null;
-    const data=results?results.filter(result=>result.status==='fulfilled').map(result=>result.value):await locate(position);
+    const locate=point=>syncRequest({direction,version:revision,pdf_revision:build,...point});
+    const results=direction==='selection'?(await syncRequest({direction:'selection',version:revision,pdf_revision:build,points:position.points})).results:null;
+    const data=results?results.filter(result=>!result.error).map(result=>result.data):await locate(position);
     if(!isCurrent())return;
     if(busy||version!==revision||pdfBuild!==build||editor.getValue()!==saved)throw new Error(t('PDF 或源码已变化，请重新选择 PDF 文字。'));
     if(results){
-      const fatal=results.find(result=>result.status==='rejected'&&result.reason.status!==400);
-      if(fatal)throw fatal.reason;
-      if(!data.length)throw results.find(result=>result.status==='rejected').reason;
+      if(!data.length)throw new Error(results[0].error);
     }
     if(direction!=='forward'){
       const paths=[...new Set((direction==='selection'?data:[data]).map(point=>point.path||document.querySelector('#filename').title))];
@@ -1276,8 +1391,21 @@ async function synchronize(direction,position,quiet=false,isCurrent=()=>true){
       editor.setCursor(cursor);editor.focus();editor.scrollIntoView(cursor,editor.getScrollInfo().clientHeight/2);
       setText(status,'已定位到源码第 {line} 行',data);
     }
-  }catch(e){if(!quiet)setText(status,'定位失败：{message}',{message:e.message});}
+  }catch(e){
+    let recovered=false;
+    if(e.status===409&&retry&&editor.getValue()===saved&&!conflict){
+      try{
+        const build=pdfBuild,data=await request('/state');
+        if(await syncCompiledPdf(data)&&pdfBuild!==build){
+          recovered=true;retryForward=direction==='forward';
+          if(!retryForward&&!quiet)setText(status,'PDF 已更新，请重新点击要定位的位置。');
+        }
+      }catch(error){e=error;}
+    }
+    if(!recovered&&!quiet)setText(status,'定位失败：{message}',{message:e.message});
+  }
   finally{syncBusy=false;updateSyncControls();selectionChat.refreshAnnotations();}
+  if(retryForward)return synchronize('forward',undefined,quiet,isCurrent,false);
 }
 forwardButton.onclick=()=>synchronize('forward');
 editor.on('gutterClick',(cm,line,gutter,event)=>{
@@ -1870,8 +1998,8 @@ function selectedPdfPoints(){
 function paintPdfAnnotations(items,edit){
   localReviewItems=items;localReviewEdit=edit;
   updateAcceptAll();
-  items=[...items,...(projectReview?.items||[])];
-  proofreadPdf?.update(items);
+  items=allProofreadItems();
+  if(!switchingSource)proofreadPdf?.update(items);
   editorReviewNavigation.update();pdfReviewNavigation.update();
   preview.querySelectorAll('.pdf-comment-highlight,.pdf-comment-pin,.pdf-proofread-actions,.pdf-proofread-highlights').forEach(mark=>mark.remove());
   if(proofreadPdf?.active){paintProofreadActions(pdfViewer,proofreadPdf.data,items,pdfBuild,t);return;}
@@ -1893,7 +2021,7 @@ function paintPdfAnnotations(items,edit){
       pin.title=item.request;pin.setAttribute('aria-label',t('编辑批注 {number}',{number:item.id})+' · '+item.request);
       const rows=pinRows.get(page)||[],lane=rows.filter(y=>Math.abs(y-top)<24).length;rows.push(top);pinRows.set(page,rows);
       Object.assign(pin.style,{left:Math.max(0,Math.min(8+28*lane,view.viewport.width-28))+'px',top:Math.max(0,top-4)+'px'});
-      pin.onclick=()=>edit(item,pin.getBoundingClientRect());view.div.append(pin);
+      pin.onclick=()=>item.edit?item.edit(pin.getBoundingClientRect()):edit(item,pin.getBoundingClientRect());view.div.append(pin);
     }
   }
 }
@@ -2095,6 +2223,27 @@ def project_files(root, extensions=SOURCE_EXTENSIONS):
     return sorted(set(files))
 
 
+def validate_dropped_file(data):
+    if not isinstance(data, dict):
+        raise ValueError('拖入文件信息无效，请重新拖入。')
+    name = data.get('name')
+    if (not isinstance(name, str) or not name or any(char in name for char in '/\\\x00')
+            or Path(name).suffix.lower() not in SOURCE_EXTENSIONS):
+        raise ValueError('请拖入单个 .tex、.md 或 .markdown 文件。')
+    if 'sha256' in data or 'size' in data:
+        if (type(data.get('size')) is not int or data['size'] < 0
+                or not isinstance(data.get('sha256'), str) or not re.fullmatch(r'[0-9a-f]{64}', data['sha256'])):
+            raise ValueError('拖入文件校验信息无效，请重新拖入。')
+    return data
+
+
+def matches_dropped_file(path, data):
+    if os.path.normcase(path.name) != os.path.normcase(data['name']):
+        return False
+    return 'sha256' not in data or (path.stat().st_size == data['size']
+        and hashlib.sha256(path.read_bytes()).hexdigest() == data['sha256'])
+
+
 class MainFileChoice(ValueError):
     def __init__(self, root, path, candidates):
         super().__init__('当前文件被多个主文件引用，请选择主编译文件。')
@@ -2167,19 +2316,47 @@ def project_main_file(root, candidate, current=None, choice=None):
     raise MainFileChoice(root, candidate, candidates)
 
 
+def recorder_inputs(recorder, directory):
+    if not recorder.is_file():
+        return []
+    inputs = {}
+    for line in recorder.read_text(encoding='utf-8', errors='replace').splitlines():
+        if line.startswith('PWD '):
+            directory = Path(line[4:])
+        elif line.startswith('INPUT '):
+            inputs[directory / line[6:].strip('"')] = None
+    # TeX records the same package many times; resolve each path only once.
+    return list(dict.fromkeys(file.resolve() for file in inputs))
+
+
+def document_source_files(root, main_file, build=None):
+    """Main first, then recursive input/include order and recorded macro inputs."""
+    files = set(project_files(root, ('.tex',)))
+    ordered, seen = [], set()
+    def visit(file):
+        if file not in files or file in seen:
+            return
+        seen.add(file); ordered.append(file)
+        for name in tex_file_inputs(snapshot(file)['source'])[1]:
+            target = (main_file.parent / name).resolve()
+            if target not in files:
+                target = Path(str(target) + '.tex')
+            visit(target)
+    visit(main_file)
+    recorder = Path(build) / (main_file.stem + '.fls') if build else None
+    if recorder:
+        for file in recorder_inputs(recorder, main_file.parent):
+            visit(file)
+    return ordered
+
+
 def project_dependencies(root, main_file, build):
     # Bibliography processors read these outside TeX's .fls recorder.
     files = set(project_files(root, ('.tex', '.bib', '.bst'))) if document_type(main_file) == 'latex' else {main_file}
     recorder = Path(build) / (main_file.stem + '.fls')
-    if recorder.is_file():
-        directory = root
-        for line in recorder.read_text(encoding='utf-8', errors='replace').splitlines():
-            if line.startswith('PWD '):
-                directory = Path(line[4:])
-            elif line.startswith('INPUT '):
-                file = (directory / line[6:].strip('"')).resolve()
-                if file.is_relative_to(root) and not file.is_relative_to(Path(build)) and '.latex-codex' not in file.parts:
-                    files.add(file)
+    for file in recorder_inputs(recorder, root):
+        if file.is_relative_to(root) and not file.is_relative_to(Path(build)) and '.latex-codex' not in file.parts:
+            files.add(file)
     return files
 
 
@@ -2290,12 +2467,13 @@ def open_folder(directory):
             raise OSError(result.stderr.decode('utf-8', errors='replace').strip() or '无法打开系统文件管理器。')
 
 
-def choose_file(path):
+def choose_file(path, suggested_name=''):
+    title = '选择拖入的原文件：' + suggested_name if suggested_name else '打开 LaTeX / Markdown 文件'
     if sys.platform == 'darwin':
         script = ('on run argv\ntry\n'
-                  'set chosen to choose file with prompt "打开 LaTeX / Markdown 文件" default location (POSIX file (item 1 of argv))\n'
+                  'set chosen to choose file with prompt (item 2 of argv) default location (POSIX file (item 1 of argv))\n'
                   'return POSIX path of chosen\non error number -128\nreturn ""\nend try\nend run')
-        result = subprocess.run(['osascript', '-e', script, str(path.parent)], capture_output=True)
+        result = subprocess.run(['osascript', '-e', script, str(path.parent), title], capture_output=True)
         if result.returncode:
             raise OSError('无法打开系统文件选择器：' + result.stderr.decode('utf-8', errors='replace'))
         return result.stdout.decode('utf-8').strip()
@@ -2309,7 +2487,7 @@ def choose_file(path):
         root.withdraw()
         root.attributes('-topmost', True)
         try:
-            return filedialog.askopenfilename(parent=root, title='打开 LaTeX / Markdown 文件', initialdir=str(path.parent), filetypes=[('LaTeX / Markdown', '*.tex *.md *.markdown'), ('LaTeX', '*.tex'), ('Markdown', '*.md *.markdown')])
+            return filedialog.askopenfilename(parent=root, title=title, initialdir=str(path.parent), initialfile=suggested_name, filetypes=[('LaTeX / Markdown', '*.tex *.md *.markdown'), ('LaTeX', '*.tex'), ('Markdown', '*.md *.markdown')])
         finally:
             root.destroy()
     except tk.TclError as error:
@@ -2794,7 +2972,7 @@ def save_history_pdf_images(cache, changes):
             except OSError: pass
 
 
-def compile_source_snapshot(server, path, source, proofread=False):
+def compile_source_snapshot(server, path, source, proofread=False, overrides=None):
     directory = tempfile.TemporaryDirectory(prefix='latex-preview-')
     try:
         root = getattr(server, 'project_root', path.parent)
@@ -2803,7 +2981,8 @@ def compile_source_snapshot(server, path, source, proofread=False):
         entry = overlay / path.relative_to(root)
         entry.parent.mkdir(parents=True, exist_ok=True)
         main_entry = overlay / main_file.relative_to(root)
-        main_source = source if main_file == path else snapshot(main_file)['source']
+        overrides = overrides or {}
+        main_source = source if main_file == path else overrides.get(main_file, snapshot(main_file)['source'])
         entry.write_bytes(source.encode('utf-8'))
         if proofread:
             main_source = color_preamble(main_source)
@@ -2812,9 +2991,15 @@ def compile_source_snapshot(server, path, source, proofread=False):
         if main_file != path:
             main_entry.parent.mkdir(parents=True, exist_ok=True)
             main_entry.write_bytes(main_source.encode('utf-8'))
+        for file, text in overrides.items():
+            if file in (path, main_file):
+                continue
+            target = overlay / file.relative_to(root)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(text.encode('utf-8'))
         # Explicit ../ inputs must exist beside the temporary main file on MiKTeX.
         dependencies = set(project_files(root, (*SOURCE_EXTENSIONS, '.bib', '.bst'))) | getattr(server, 'dependencies', set())
-        for dependency in dependencies - {path, main_file}:
+        for dependency in dependencies - {path, main_file, *overrides}:
             if dependency.is_file() and dependency.is_relative_to(root):
                 target = overlay / dependency.relative_to(root)
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -2825,6 +3010,7 @@ def compile_source_snapshot(server, path, source, proofread=False):
             raise ValueError(('PDF 校对预览编译失败：' if proofread else '历史版本编译失败：') + log[-1800:])
         cached = {'directory': directory, 'entry':sync_entry(entry, directory.name), 'pdf': pdf, 'synctex':pdf.with_suffix('.tex'), 'root':main_entry.parent,
                   'source':source, 'markdown':document_type(path) == 'markdown',
+                  'entries': {file: sync_entry(overlay / file.relative_to(root), directory.name) for file in {path, main_file, *overrides}},
                   'revision': hashlib.sha256(pdf.read_bytes()).hexdigest()}
         return cached
     except Exception:
@@ -2846,7 +3032,91 @@ def history_pdf_snapshot(server, path, source):
     return key, cached
 
 
-def proofread_pdf(server, path, source, items):
+def proofread_sync_snapshot(server, compiled, documents, ranges):
+    sync = compiled['pdf'].with_suffix('.synctex.gz')
+    compressed = sync.is_file()
+    if not compressed:
+        sync = sync.with_suffix('')
+    if not sync.is_file():
+        return None
+    raw = sync.read_bytes()
+    text = (gzip.decompress(raw) if compressed else raw).decode('utf-8', errors='replace')
+    overlay = Path(compiled['directory'].name) / 'source'
+    inputs, sources, annotations = {}, {}, {}
+    for filename in re.findall(r'^Input:\d+:(.+)$', text, re.M):
+        entry = (compiled['root'] / filename).resolve()
+        if entry.is_relative_to(overlay):
+            file = server.project_root / entry.relative_to(overlay)
+        elif entry.is_relative_to(server.project_root):
+            file = entry
+        else:
+            continue
+        if file.suffix.lower() == '.tex' and file.is_file():
+            inputs[str(entry)] = str(file)
+    for file in set(documents) | {Path(file) for file in inputs.values()}:
+        state = snapshot(file)
+        source, items = documents.get(file, (state['source'].replace('\r\n', '\n'), []))
+        by_id = {item['id']: item for item in items}
+        spans = []
+        for span in ranges.get(file, []):
+            item = by_id[span['id']]
+            first, last = (source.count('\n', 0, item[key]) + 1 for key in ('start', 'end'))
+            spans.append({**span, 'source_first':first, 'source_last':last})
+            annotations[item['id']] = (str(file), first)
+        sources[str(file)] = {'version':state['version'], 'digest':source_digest(source),
+            'lines':len(source.split('\n')), 'shift':int(file == server.main_file), 'ranges':spans}
+    revision = hashlib.sha256(raw + json.dumps(sources, sort_keys=True).encode()).hexdigest()
+    return {'synctex':raw, 'compressed':compressed, 'inputs':inputs, 'sources':sources,
+        'annotations':annotations, 'query_root':str(compiled['root']), 'revision':revision,
+        'main_file':str(server.main_file), 'project_root':str(server.project_root)}
+
+
+def locate_proofread(cache, pdf, boxes, data):
+    page, x, y = data.get('page'), data.get('x'), data.get('y')
+    if type(page) is not int or not 1 <= page <= len(boxes):
+        raise ValueError('PDF 页码无效。')
+    left, bottom, right, top = boxes[page - 1]
+    if not all(type(n) in (int, float) and math.isfinite(n) for n in (x, y)) or not (left <= x <= right and bottom <= y <= top):
+        raise ValueError('PDF 坐标无效。')
+    identifier = data.get('annotation_id')
+    if identifier is not None:
+        if type(identifier) is not int or identifier not in cache['annotations']:
+            raise ValueError('校对选区已变化，请重新选择。')
+        file, line = cache['annotations'][identifier]
+    else:
+        with tempfile.TemporaryDirectory(prefix='latex-proofread-sync-') as directory:
+            output = Path(directory) / 'preview.pdf'
+            output.write_bytes(pdf)
+            output.with_suffix('.synctex.gz' if cache['compressed'] else '.synctex').write_bytes(cache['synctex'])
+            records = synctex_records(['edit', '-o', f'{page}:{x-left}:{top-y}:{output}'], directory)
+        for record in records:
+            if 'Input' not in record or 'Line' not in record:
+                continue
+            file = cache['inputs'].get(str((Path(cache['query_root']) / record['Input']).resolve()))
+            if file is None:
+                continue
+            state = cache['sources'][file]
+            line = max(1, int(record['Line']) - state['shift'])
+            delta = 0
+            for span in state['ranges']:
+                if line < span['first']:
+                    break
+                if line <= span['last']:
+                    line, delta = span['source_first'], 0
+                    break
+                delta += span['last'] - span['first'] - (span['source_last'] - span['source_first'])
+            line -= delta
+            break
+        else:
+            raise ValueError('该处没有对应源码，请双击 PDF 正文或公式。')
+    state = cache['sources'][file]
+    return {'path':file, 'line':max(1, min(line, state['lines'])), 'column':1,
+        'version':state['version'], 'source_digest':state['digest']}
+
+
+def proofread_pdf(server, path, source, items, files=None):
+    if files is not None:
+        return project_proofread_pdf(server, path, source, items, files)
     if not isinstance(source, str):
         raise ValueError('校对预览需要 UTF-8 源码。')
     if document_type(path) != 'latex':
@@ -2884,8 +3154,85 @@ def proofread_pdf(server, path, source, items):
                             rect = pages[page]
                             rect[:] = [min(rect[0],box[0]),min(rect[1],box[1]),max(rect[2],box[2]),max(rect[3],box[3])]
             regions.extend({'id':item['id'], 'page':page, 'rect':rect} for page, rect in sorted(pages.items()))
-        return {'pdf':compiled['pdf'].read_bytes(), 'pdf_revision':compiled['revision'], 'top_origin':True, 'plain_preview':plain_preview,
+        sync = proofread_sync_snapshot(server, compiled, {path:(source,items)}, {path:ranges})
+        return {'pdf':compiled['pdf'].read_bytes(), '_proofread_sync':sync, 'proofread_version':sync['revision'] if sync else None,
+                'pdf_revision':compiled['revision'], 'top_origin':True, 'plain_preview':plain_preview,
                 'outline':compiled_outline(compiled['pdf'].with_suffix('.aux')), 'regions':regions}
+    finally:
+        compiled['directory'].cleanup()
+
+
+def project_proofread_pdf(server, path, source, items, files):
+    if document_type(path) != 'latex' or not isinstance(source, str) or not isinstance(items, list) or not isinstance(files, list):
+        raise ValueError('校对预览需要 TeX 源码和文件列表。')
+    scope = set(document_source_files(server.project_root, server.main_file, server.build.name))
+    documents = {path: (source, items)}
+    for file in files:
+        if not isinstance(file, dict):
+            raise ValueError('校对预览文件无效。')
+        target = project_source(server.project_root, file.get('path'))
+        if target not in scope or target in documents:
+            raise ValueError('校对文件必须属于当前主文稿，且不能重复。')
+        current = snapshot(target)
+        if file.get('version') != current['version'] or file.get('source') != current['source'].replace('\r\n', '\n'):
+            raise FileConflict('项目文件已变化，请重新生成校对预览。')
+        documents[target] = (file['source'], file.get('items'))
+    identifiers, source_only = set(), []
+    plain = False
+    for file, (text, suggestions) in documents.items():
+        if not isinstance(suggestions, list):
+            raise ValueError('校对预览建议无效。')
+        if suggestions:
+            proofread_source(text, suggestions, decorate=False)
+        start = document_start(text) if file == server.main_file else None
+        for item in suggestions:
+            if item['id'] in identifiers:
+                raise ValueError('跨文件校对编号不能重复。')
+            identifiers.add(item['id'])
+            if start and item['start'] < start.end():
+                if item.get('display_original') is None or item['selection'] != item['replacement']:
+                    raise ValueError('校对选区位于导言区。')
+                source_only.append(item['id'])
+            plain |= bool(re.search(r'\\(?:frac|dfrac|tfrac|binom|overset|underset)\s*$', text[:item['start']]))
+    if not 1 <= len(identifiers) <= 1000:
+        raise ValueError('校对预览需要 1–1000 处建议。')
+    def marked_sources(decorate):
+        marked, ranges = {}, {}
+        for file, (text, suggestions) in documents.items():
+            body = [item for item in suggestions if item['id'] not in source_only]
+            start = document_start(text) if file == server.main_file else None
+            marked[file], ranges[file] = proofread_source(text, body, start.end() if start else 0, decorate=decorate) if body else (text, [])
+        return marked, ranges
+    marked, ranges = marked_sources(not plain)
+    try:
+        compiled = compile_source_snapshot(server, path, marked[path], proofread=True, overrides=marked)
+    except ValueError as error:
+        if plain or not str(error).startswith('PDF 校对预览编译失败：'):
+            raise
+        marked, ranges = marked_sources(False)
+        compiled = compile_source_snapshot(server, path, marked[path], proofread=True, overrides=marked)
+        plain = True
+    try:
+        regions = []
+        for file, spans in ranges.items():
+            index = history_pdf_line_index({**compiled, 'entry':compiled['entries'][file], 'individual_boxes':True}) or {}
+            shift = int(file == server.main_file)
+            for item in spans:
+                pages = {}
+                for line in range(item['first'] + shift, item['last'] + shift + 1):
+                    for page, boxes in index.get(line, {}).items():
+                        for box in boxes:
+                            old = pages.get(page)
+                            pages[page] = list(box) if old is None else [min(old[0],box[0]),min(old[1],box[1]),max(old[2],box[2]),max(old[3],box[3])]
+                regions.extend({'id':item['id'],'path':str(file),'page':page,'rect':rect} for page, rect in sorted(pages.items()))
+        mapped = {region['id'] for region in regions}
+        for file, (_, suggestions) in documents.items():
+            regions.extend({'id':item['id'],'path':str(file),'page':1,'rect':[0,-20,100,-4],'source_only':True}
+                           for item in suggestions if item['id'] not in mapped)
+        sync = proofread_sync_snapshot(server, compiled, documents, ranges)
+        return {'pdf':compiled['pdf'].read_bytes(), '_proofread_sync':sync, 'proofread_version':sync['revision'] if sync else None,
+                'pdf_revision':compiled['revision'], 'top_origin':True,
+                'plain_preview':plain, 'outline':compiled_outline(compiled['pdf'].with_suffix('.aux')), 'regions':regions}
     finally:
         compiled['directory'].cleanup()
 
@@ -3228,7 +3575,9 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
         states = {file.relative_to(root).as_posix(): snapshot(file) for file in project_files(root, ('.tex',))}
         server.review.initialize({file: state['source'] for file, state in states.items()})
         reviews = [server.review.file_review(file, state) for file, state in states.items()]
-        return {'enabled': True, 'files': [review for review in reviews if review['hunks']]}
+        return {'enabled': True, 'files': [review for review in reviews if review['hunks']],
+                'source_order': [str(file) for file in document_source_files(root, main_file, server.build.name)],
+                'main_file': str(main_file), 'project_root': str(root)}
 
     def save_current(source, version, **options):
         before = snapshot(path)['source']
@@ -3237,6 +3586,15 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
         if active and path.suffix.lower() == '.tex':
             server.review.saved(path.relative_to(root).as_posix(), before, state['source'])
         return state
+
+    def selection_line_index(file):
+        if server.selection_sync is None:
+            server.selection_sync = {}
+        if file not in server.selection_sync:
+            server.selection_sync[file] = {'entry':sync_entry(file, server.build.name),
+                'synctex':note_tex_path(server.build.name, main_file), 'boxes':server.page_boxes,
+                'root':main_file.parent, 'individual_boxes':True}
+        return history_pdf_line_index(server.selection_sync[file]) or {}
 
     def project_state():
         nonlocal project_words, word_path
@@ -3263,11 +3621,13 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
         fingerprint = project_digest(dependencies)
         synced = bool(server.sync_version) and fingerprint == server.project_version
         return {**state, 'project_root': str(root), 'main_file': str(main_file), 'project_words': project_words, **tex_options(server),
+                'source_order': [str(file) for file in document_source_files(root, main_file, server.build.name)] if document_type(main_file) == 'latex' else [],
                 'main_source': snapshot(main_file)['source'] if main_file != path else '',
                 'files': [{'path': str(file), 'name': file.relative_to(root).as_posix()} for file in files],
                 'project_version': fingerprint, 'sync': synced,
                 'pdf_revision': server.pdf_revision, 'labels': server.labels if synced else {},
-                'citations': server.citations if synced else {}}
+                'citations': server.citations if synced else {},
+                'outline': compiled_outline(Path(server.build.name) / (main_file.stem + '.aux')) if synced else []}
 
     def switch_source(candidate, entry):
         nonlocal path, history, main_file
@@ -3350,7 +3710,7 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
                 try:
                     saved = json.dumps(self.server.preferences.read(), ensure_ascii=False).replace('<', '\\u003c')
                     page = PAGE.replace('<!--USER_PREFERENCES-->', '<script id="user-preferences" type="application/json">' + saved + '</script>')
-                    page = page.replace('<html ', '<html data-ai-backend="' + ai_backend + '" ', 1)
+                    page = page.replace('<html ', '<html data-ai-backend="' + ai_backend + '" data-native-drop="' + ('on' if sys.platform == 'win32' else 'off') + '" ', 1)
                     if ai_backend == 'deepseek':
                         page = page.replace('<title>LaTeX in AI Sidebar · Codex</title>', '<title>LaTeX in AI Sidebar · DeepSeek Harness</title>')
                     self.reply(200, page.encode('utf-8'), 'text/html; charset=utf-8')
@@ -3477,7 +3837,7 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
                 self.reply(404, {'error': 'Not found. Compile successfully to create a PDF.'})
 
         def do_POST(self):
-            if self.path == '/project/choose-file':
+            if self.path in ('/project/choose-file', '/native-drop'):
                 self.post()
                 return
             if self.path == '/completion':
@@ -3507,7 +3867,7 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
             nonlocal path, history, root, main_file
             if not self.local():
                 return
-            if self.path not in ('/completion', '/main-chat', '/project-review', '/preferences', '/compile', '/proofread', '/save', '/open', '/open-folder', '/source', '/project', '/project/choose-file', '/synctex', '/chat', '/chat/cancel', '/chat/new', '/chat/branch', '/chat/rename', '/chat/delete', '/chat/export', '/source-quote', '/history/diff', '/history/label', '/history/restore', '/history/pdf', '/history/pdf-cancel', '/history/pdf-cache', '/history/summaries', '/history/summaries/cancel'):
+            if self.path not in ('/completion', '/main-chat', '/project-review', '/preferences', '/compile', '/proofread', '/save', '/open', '/open-folder', '/native-drop', '/source', '/project', '/project/choose-file', '/synctex', '/chat', '/chat/cancel', '/chat/new', '/chat/branch', '/chat/rename', '/chat/delete', '/chat/export', '/source-quote', '/history/diff', '/history/label', '/history/restore', '/history/pdf', '/history/pdf-cancel', '/history/pdf-cache', '/history/summaries', '/history/summaries/cancel'):
                 self.reply(404, {'error': 'Not found.'})
                 return
             try:
@@ -3519,6 +3879,16 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
                 data = json.loads(payload)
                 if not isinstance(data, dict):
                     raise ValueError('Expected a JSON object.')
+                if self.path == '/native-drop':
+                    request_id, action = data.get('id'), data.get('action')
+                    if not isinstance(request_id, str) or not re.fullmatch(r'[0-9a-f]{32}', request_id) or action not in ('arm', 'status', 'cancel'):
+                        raise ValueError('Invalid native drop request.')
+                    if action == 'arm':
+                        result = self.server.native_drop.arm(request_id, data.get('area'))
+                    else:
+                        result = self.server.native_drop.read(request_id, cancel=action == 'cancel')
+                    self.reply(200, result)
+                    return
                 if self.path == '/project/choose-file':
                     selected = choose_file(main_file)
                     if not selected:
@@ -3575,6 +3945,10 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
                         return
                     if not project_reviews()['enabled']:
                         raise ValueError('请先开启项目修改校对。')
+                    if data.get('main_file', str(main_file)) != str(main_file) or data.get('project_root', str(root)) != str(root):
+                        raise FileConflict('当前主文稿已切换，请刷新校对后重试。')
+                    if 'current_path' in data and (data['current_path'] != str(path) or data.get('current_version') != snapshot(path)['version']):
+                        raise FileConflict('当前源码文件已变化，请刷新校对后重试。')
                     target = project_source(root, data.get('path'))
                     if target.suffix.lower() != '.tex':
                         raise ValueError('项目修改校对仅支持 .tex 源码。')
@@ -3596,19 +3970,25 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
                             state = save_source(target, restored, state['version'], target_history)
                         else:
                             target_history.record(state['source'], 'review', force=True)
-                    self.reply(200, {'state': state, **project_reviews()})
+                    self.reply(200, {'state': state, 'current_state': project_state(), **project_reviews()})
                     return
                 if self.path == '/proofread':
                     if data.get('path') != str(path) or data.get('version') != snapshot(path)['version']:
                         raise FileConflict('源码文件已变化，请重新生成校对预览。')
+                    if data.get('main_file', str(main_file)) != str(main_file) or data.get('project_root', str(root)) != str(root):
+                        raise FileConflict('当前主文稿已切换，请重新生成校对预览。')
                     dependencies = set(project_files(root, (*SOURCE_EXTENSIONS, '.bib', '.bst'))) | self.server.dependencies
                     fingerprint = project_digest(dependencies)
-                    result = proofread_pdf(self.server, path, data.get('source'), data.get('items'))
+                    result = proofread_pdf(self.server, path, data.get('source'), data.get('items'), files=data.get('files'))
                     if fingerprint != project_digest(dependencies):
                         raise FileConflict('项目文件已变化，请重新生成校对预览。')
                     self.server.proofread_pdfs[result['pdf_revision']] = result.pop('pdf')
+                    sync = result.pop('_proofread_sync')
+                    self.server.proofread_sync[result['pdf_revision']] = {**sync, 'dependencies':dependencies, 'fingerprint':fingerprint} if sync else None
                     while len(self.server.proofread_pdfs) > 2:
-                        self.server.proofread_pdfs.pop(next(iter(self.server.proofread_pdfs)))
+                        removed = next(iter(self.server.proofread_pdfs))
+                        self.server.proofread_pdfs.pop(removed)
+                        self.server.proofread_sync.pop(removed, None)
                     self.reply(200, {**result, 'ok':True, 'proofread':True, 'sync':False, 'pdf_url':'/proofread/pdf'})
                     return
                 if self.path in ('/source', '/project'):
@@ -3619,6 +3999,8 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
                     if self.path == '/source':
                         candidate = project_source(root, data.get('path'))
                         entry = project_main_file(root, candidate, main_file, data.get('main_file'))
+                        if 'annotation_main_file' in data and (data['annotation_main_file'] != str(main_file) or entry != main_file):
+                            raise FileConflict('请先处理当前文章的批注，再切换主文稿。')
                         self.reply(200, switch_source(candidate, entry))
                         return
                     if 'project_root' in data:
@@ -3870,24 +4252,73 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
                     self.reply(200, {'id': self.server.chat.id})
                     return
                 if self.path == '/synctex':
-                    if not project_state()['sync'] or data.get('version') != self.server.sync_version or data.get('pdf_revision') != self.server.pdf_revision or snapshot(path)['version'] != self.server.sync_version:
+                    if data.get('proofread_version') is not None:
+                        if not isinstance(data.get('pdf_revision'), str) or not isinstance(data['proofread_version'], str):
+                            raise ValueError('PDF 或源码已变化，请重新选择 PDF 文字。')
+                        cached = self.server.proofread_sync.get(data.get('pdf_revision'))
+                        current = cached and cached['sources'].get(str(path))
+                        if (not current or data.get('direction') != 'backward'
+                                or cached['revision'] != data['proofread_version']
+                                or cached['main_file'] != str(main_file) or cached['project_root'] != str(root)
+                                or data.get('path') != str(path) or data.get('version') != snapshot(path)['version']
+                                or data['version'] != current['version'] or data.get('source_digest') != current['digest']
+                                or project_digest(cached['dependencies']) != cached['fingerprint']):
+                            raise FileConflict('PDF 或源码已变化，请重新选择 PDF 文字。')
+                        result = locate_proofread(cached, self.server.proofread_pdfs[data['pdf_revision']], validate_pdf_boxes(data.get('boxes')), data)
+                        if project_digest(cached['dependencies']) != cached['fingerprint']:
+                            raise FileConflict('PDF 或源码已变化，请重新选择 PDF 文字。')
+                        self.reply(200, result)
+                        return
+                    dependencies = project_dependencies(root, main_file, self.server.build.name) | self.server.dependencies
+                    if (not self.server.sync_version or project_digest(dependencies) != self.server.project_version
+                            or data.get('version') != self.server.sync_version or data.get('pdf_revision') != self.server.pdf_revision
+                            or snapshot(path)['version'] != self.server.sync_version):
                         self.reply(409, {'error': '源码与 PDF 版本不同，请先成功编译后再定位。'})
                         return
                     boxes = validate_pdf_boxes(data.get('boxes'))
                     if boxes != self.server.page_boxes:
                         self.server.page_boxes = boxes
                         self.server.selection_sync = None
-                    if data.get('direction') == 'range':
+                    if data.get('direction') == 'selection':
+                        points = data.get('points')
+                        if not isinstance(points, list) or not 1 <= len(points) <= 4 or any(not isinstance(point, dict) for point in points):
+                            raise ValueError('PDF 坐标无效。')
+                        def locate_point(point):
+                            try:
+                                query = {'direction':'backward', **{key:point.get(key) for key in ('page', 'x', 'y')}}
+                                return {'data':locate(path, self.server.build.name, boxes, query, main_file, root)}
+                            except ValueError as error:
+                                return {'error':str(error)}
+                        with ThreadPoolExecutor(max_workers=len(points)) as pool:
+                            results = list(pool.map(locate_point, points))
+                        paths = {result['data']['path'] for result in results if 'data' in result}
+                        if len(paths) > 1:
+                            indexes = {file:selection_line_index(project_source(root, file)) for file in paths}
+                            if all(indexes.values()):
+                                # SyncTeX can label a paragraph's final glyph with the next input file.
+                                for point, result in zip(points, results):
+                                    if 'data' not in result:
+                                        continue
+                                    matches = {}
+                                    for file, index in indexes.items():
+                                        rows = [(abs(point['y']-(rect[1]+rect[3])/2), line)
+                                            for line, pages in index.items() for rect in pages.get(point['page'], ())
+                                            if rect[0]-2 <= point['x'] <= rect[2]+2 and rect[1]-2 <= point['y'] <= rect[3]+2]
+                                        if rows:
+                                            matches[file] = rows
+                                    if len(matches) == 1:
+                                        file, rows = next(iter(matches.items()))
+                                        if file != result['data']['path']:
+                                            result['data'] = {'path':file, 'line':min(rows)[1], 'column':1}
+                        if project_digest(dependencies) != self.server.project_version:
+                            raise FileConflict('源码与 PDF 版本不同，请先成功编译后再定位。')
+                        self.reply(200, {'results':results})
+                    elif data.get('direction') == 'range':
                         first, last = data.get('first'), data.get('last')
                         if (type(first) is not int or type(last) is not int or not
                                 1 <= first <= last <= len(snapshot(path)['source'].splitlines()) or last-first > 400):
                             raise ValueError('源码范围无效。')
-                        if self.server.selection_sync is None:
-                            self.server.selection_sync = {'entry':sync_entry(path, self.server.build.name),
-                                'synctex':note_tex_path(self.server.build.name, main_file), 'boxes':self.server.page_boxes,
-                                'root':main_file.parent,
-                                'individual_boxes':True}
-                        index = history_pdf_line_index(self.server.selection_sync) or {}
+                        index = selection_line_index(path)
                         regions, line_regions = set(), {}
                         for line in range(first, last+1):
                             rows = set()
@@ -3901,13 +4332,21 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
                         self.reply(200, locate(path, self.server.build.name, self.server.page_boxes, data, main_file, root))
                     return
                 if self.path == '/open':
-                    selected = data.get('path') if isinstance(data.get('path'), str) else choose_file(path)
+                    dropped = validate_dropped_file(data['dropped_file']) if 'dropped_file' in data else None
+                    selected = data.get('path') if isinstance(data.get('path'), str) else None
+                    if selected is None and dropped:
+                        matches = [file for file in project_files(root) if matches_dropped_file(file, dropped)] if 'sha256' in dropped else []
+                        selected = str(matches[0]) if len(matches) == 1 else choose_file(path, dropped['name'])
+                    elif selected is None:
+                        selected = choose_file(path)
                     if not selected:
                         self.reply(200, {'cancelled': True})
                         return
                     candidate = Path(selected).resolve(strict=True)
                     if not candidate.is_file() or candidate.suffix.lower() not in SOURCE_EXTENSIONS:
                         raise ValueError('Choose an existing UTF-8 .tex, .md or .markdown file.')
+                    if dropped and not matches_dropped_file(candidate, dropped):
+                        raise ValueError('所选文件与拖入文件不一致，请重新拖入或使用“文件 → 打开文件”。')
                     state = snapshot(candidate)
                     if candidate.is_relative_to(root):
                         entry = project_main_file(root, candidate, main_file, data.get('main_file'))
@@ -4024,6 +4463,7 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
 
     # Browser preconnects must not monopolize accept(); serialize document operations, not idle sockets.
     server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    server.build = build
     server.preferences = Preferences(preferences_path)
     server.review = ProjectReview(root)
     if server.preferences.read().get('latex-codex-proofread-project') == 'on':
@@ -4033,6 +4473,7 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
     server.history_summary = None
     server.history_pdfs = {}
     server.proofread_pdfs = {}
+    server.proofread_sync = {}
     server.history_pdf_request = None
     server.pdf = b''
     server.pdf_revision = ''
@@ -4040,10 +4481,14 @@ def make_server(path, port=0, main_thread=None, project_root=None, preferences_p
     server.sync_version = ''
     server.selection_sync = None
     server.engine_name = ''
-    server.build = build
     server.main_file, server.project_root = main_file, root
     server.dependencies, server.project_version = set(), ''
     server.labels, server.citations = {}, {}
+    server.native_drop = NativeDrop()
+    def close_server():
+        server.native_drop.close()
+        ThreadingHTTPServer.server_close(server)
+    server.server_close = close_server
     return server
 
 

@@ -90,4 +90,17 @@ const jumpCount=jumps.length;positions=[];previous.onclick();
 assert.equal(previous.hidden,true);assert.equal(button.hidden,true);assert.equal(jumps.length,jumpCount,'Resolved changes cannot remain upward click targets.');
 positions=[50];handlers['latex-language-change']();paint();assert.equal(previousLabel.textContent,'1 more updates above');
 top=0;navigation.update();paint();assert.equal(previous.hidden,true);
+// File order precedes offsets; local offscreen changes remain nearer than other files.
+const remoteJumps=[];
+const remote=(direction,order,offset)=>({direction,order,offset,navigate:()=>remoteJumps.push([order,offset])});
+positions=[remote('below',3,5),remote('above',0,9),remote('above',1,20),remote('below',2,8),
+  remote('above',1,10),remote('below',2,2),50,350];top=100;bottom=300;
+navigation.update();paint();
+assert.equal(previousLabel.textContent,'4 more updates above');assert.equal(label.textContent,'4 more updates below');
+previous.onclick();assert.equal(jumps.at(-1),26,'A local preceding change comes before a jump to another file.');
+button.onclick();assert.equal(jumps.at(-1),326);
+positions=positions.filter(position=>typeof position!=='number');
+previous.onclick();assert.deepEqual(remoteJumps.at(-1),[1,20],'Jump to the last change in the nearest preceding file.');
+button.onclick();assert.deepEqual(remoteJumps.at(-1),[2,2],'Jump to the first change in the nearest following file.');
+positions=[];button.onclick();assert.equal(button.hidden,true);assert.equal(previous.hidden,true);
 console.log('PASS: lossless Unicode/multiline diff, literal markup, deletion, resize, busy exclusion, save failure/retry and cleanup');

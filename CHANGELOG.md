@@ -1,5 +1,18 @@
 # Changelog / 更新日志
 
+## 0.3.12 — 2026-11-03
+
+- Improve whole-article Proofread: combine the main document and its child sources in one temporary PDF, retain annotations when switching sources, and support article-wide Send, Keep/Undo and change navigation while excluding unrelated papers.
+- Give proofread PDFs their own SyncTeX and source-line mapping. Double-clicks navigate original, replacement and unchanged text without accepting suggestions; preview reuse and marked-content geometry keep buttons and navigation on the correct pages.
+- Improve PDF box-selection/source mapping with concurrent batched SyncTeX anchors, cached per-file compiled rows and stricter wrong-file disambiguation. Keep the box during a source switch and preserve genuine cross-file conflict evidence and version guards.
+- Synchronize a replaced or restarted formal PDF without saving or recompiling unchanged source. Preserve drafts and proofread previews, retry a forward lookup only after adopting a new PDF, and require reselection for old inverse coordinates.
+- Add original-file drag-and-drop handling, including a short-lived Windows OLE receiver and a local SHA-256/native-picker fallback when browsers hide paths. Do not create imported manuscript copies.
+- Release only Codex as `0.3.12`. DeepSeek remains `0.3.9-deepseek.1`; update only the shared packaging module list so future builds include the new runtime dependency.
+
+本次重点优化 Proofread 逻辑和框选定位：整篇文稿的跨文件批注、校对与操作统一处理；校对 PDF 使用独立定位数据，切换源码保留预览；框选定位批量查询编译锚点、校正错误文件归属，并保留选框及版本保护。同步改进旧 PDF 恢复和原文件拖入。本次仅发布 Codex。
+
+Validation / 验证：29 focused frontend, backend and integration checks passed on Windows. These cover article-wide Proofread, preview-specific navigation, real PDF text/box mapping with formulas/theorem titles/repeated text, batched anchors, wrong-file correction and stale guards. Both pdfLaTeX and XeLaTeX passed 28 boundary cases each. Integration checks used temporary preferences with package installation disabled. Windows native drop registration and CF_HDROP handling passed; no live model request was made, and macOS/Linux hardware was not retested.
+
 ## 0.3.11 — 2026-10-30
 
 - Add offline English dictionary completion for LaTeX and Markdown prose: 9,800 common words, project vocabulary and ordered-letter abbreviations, with normal undoable acceptance and an independent setting.

@@ -3,9 +3,11 @@ import {t} from './latex-settings.mjs';
 export function attachProofreadNavigation({button, previous, positions, top, bottom, scroll}) {
   let frame = 0;
   function update() {
-    const targets = positions().filter(Number.isFinite).sort((a,b) => a-b);
-    const above = targets.filter(position => position < top() - 1);
-    const below = targets.filter(position => position >= bottom() - 1);
+    const all = positions(),targets = all.filter(Number.isFinite).sort((a,b) => a-b);
+    const remote = all.filter(target=>target && ['above','below'].includes(target.direction) && typeof target.navigate==='function')
+      .sort((a,b)=>a.order-b.order || a.offset-b.offset);
+    const above = [...remote.filter(target=>target.direction==='above'),...targets.filter(position => position < top() - 1)];
+    const below = [...targets.filter(position => position >= bottom() - 1),...remote.filter(target=>target.direction==='below')];
     previous.hidden = !above.length;
     previous.lastElementChild.textContent = t('上方还有 {count} 处改动', {count:above.length});
     button.hidden = !below.length;
@@ -15,8 +17,9 @@ export function attachProofreadNavigation({button, previous, positions, top, bot
   function schedule() {
     if (!frame) frame = requestAnimationFrame(() => { frame = 0; update(); });
   }
-  previous.onclick = () => { const target = update().above.at(-1); if (target !== undefined) scroll(Math.max(0,target-24)); };
-  button.onclick = () => { const target = update().below[0]; if (target !== undefined) scroll(Math.max(0,target-24)); };
+  function jump(target) { if (target?.navigate) return target.navigate(); if (target !== undefined) scroll(Math.max(0,target-24)); }
+  previous.onclick = () => jump(update().above.at(-1));
+  button.onclick = () => jump(update().below[0]);
   window.addEventListener('latex-language-change', schedule);
   return {update:schedule};
 }

@@ -15,7 +15,7 @@ export function colorReplacement(text, color, segments) {
   }).join('');
 }
 
-export function attachSelectionChat(editor, request, paintAnnotations = () => {}, recordAnnotations = async () => {}, getMacroSource = () => editor.getValue(), referencesEnabled = () => false) {
+export function attachSelectionChat(editor, request, paintAnnotations = () => {}, recordAnnotations = async () => {}, getMacroSource = () => editor.getValue(), referencesEnabled = () => false, sourceFiles = {}) {
   const $ = id => document.querySelector('#' + id);
   const panel = $('chat-panel'), input = $('chat-input'), messages = $('chat-messages'), status = $('chat-status');
   let macroSource = null, macros = {}, messagesScrollTop = null;
@@ -318,7 +318,69 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
     }});
   const quick = $('chat-quick'), quickInput = $('chat-quick-input');
   let quickMarker = null, quickDoc = null, quickOriginal = '', quickPdf = null, editingAnnotation = null;
-  let annotations = [], annotationId = 0, annotationSending = false, annotationCommitting = false;
+  let annotations = [], annotationId = 0, annotationSending = false, annotationCommitting = false, annotationBatch = null;
+  const annotatedSources = new Map();
+  let annotationSource = null, nextAnnotationSource = null, preservingSource = false;
+  function rememberSource() {
+    if (!annotationSource) return;
+    const state = sourceFiles.capture?.();
+    if (state?.path === annotationSource.path) annotationSource.version = state.version;
+    annotationSource.doc = editor.getDoc(); annotationSource.annotations = annotations;
+    if (annotations.length || annotationBatch) annotatedSources.set(annotationSource.path, annotationSource);
+    else annotatedSources.delete(annotationSource.path);
+  }
+  function sourceDocument(data, create, preserve = false) {
+    rememberSource();
+    const retained = preserve ? annotatedSources.get(data.path) : null;
+    if (preserve) {
+      const draft = input.value;
+      annotations.forEach(item => item.review?.setVisible(false));
+      annotationSource = null; annotations = []; reset(true);
+      input.value = draft;
+    } else reset();
+    const doc = retained?.doc || create();
+    nextAnnotationSource = {path:data.path,version:data.version,doc,annotations:retained?.annotations || [],
+      fileName:data.project_root ? data.path.slice(data.project_root.length).replace(/^[\\/]/,'').replaceAll('\\','/') : data.name,
+      conflict:!!retained && doc.getValue() !== data.source.replace(/\r\n/g,'\n')};
+    preservingSource = true;
+    return {doc,conflict:nextAnnotationSource.conflict};
+  }
+  function activateSource() {
+    if (!nextAnnotationSource) return;
+    annotationSource = nextAnnotationSource; nextAnnotationSource = null; preservingSource = false;
+    annotations = annotationSource.annotations; refreshAnnotations();
+  }
+  function prepareSourceSwitch(batch = null) {
+    if ((annotationBatch && batch !== annotationBatch) || sending || annotationCommitting || branches.loading || branches.hasDrafts) return false;
+    if (quickInput.value.trim() && !saveAnnotation()) return false;
+    quick.hidePopover();return true;
+  }
+  async function navigateAnnotation(item) {
+    if (annotationBatch || sending || annotationCommitting || branches.loading) return false;
+    if (item.doc !== editor.getDoc() && !await sourceFiles.open?.(item.path)) return false;
+    const current = annotations.find(other => other.id === item.id && other.doc === item.doc);
+    const pos = current && validAnnotation(current);
+    if (!pos || annotationSource?.conflict) {
+      annotationNotice(t('批注选区已变化，未发送。请点批注检查并重新选择。'), true); return false;
+    }
+    editor.scrollIntoView(pos.from,80);editor.focus();return current;
+  }
+  function allAnnotations() {
+    rememberSource();
+    if (!annotationSource) return annotations;
+    return [...annotatedSources.values()].flatMap(file => file.annotations.map(item => {
+      const source = file.doc.getValue(), pos = item.marker.find();
+      Object.assign(item,{path:file.path,fileName:file.fileName,source,version:file.version});
+      if (pos) Object.assign(item,{
+        start:Array.from(source.slice(0,file.doc.indexFromPos(pos.from))).length,
+        end:Array.from(source.slice(0,file.doc.indexFromPos(pos.to))).length});
+      if (file.doc === editor.getDoc()) return item;
+      return {...item,edit:async anchor=>{const target=await navigateAnnotation(item);if(target)editAnnotation(target,anchor);},
+        review:item.review ? {get busy(){return !!annotationBatch || sending || annotationCommitting || branches.loading;},
+          keep:async()=>{const target=await navigateAnnotation(item);if(target)return target.review.keep();},
+          undo:async()=>{const target=await navigateAnnotation(item);if(target)return target.review.undo();}} : null};
+    }));
+  }
   let mainSend = null, mainLinked = false, mainAvailable = false, mainRequest = null;
   if (document.documentElement?.dataset?.aiBackend === 'deepseek') {
     mainSend = document.createElement('button');
@@ -571,34 +633,37 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
     $('annotations-review').showPopover();
   }
   function refreshAnnotations() {
-    $('annotations-toggle').textContent = t('批注 · {count}', {count:annotations.length});
-    $('annotations-toggle').hidden = !annotations.some(item => item.review);
-    const waiting = annotations.some(item => !item.review);
+    if (!annotationBatch) for (const [path,file] of annotatedSources) if (!file.annotations.length) annotatedSources.delete(path);
+    const all = allAnnotations(), locked = !!annotationBatch || sending || annotationCommitting;
+    $('annotations-toggle').textContent = t('批注 · {count}', {count:all.length});
+    $('annotations-toggle').hidden = !all.length;
+    const waiting = all.some(item => !item.review);
     $('annotations-send').hidden = !waiting;
-    $('annotations-send').disabled = sending || annotationCommitting || !waiting;
+    $('annotations-send').disabled = locked || !waiting;
     if (mainSend) {
-      mainSend.hidden = !waiting;
-      mainSend.disabled = sending || annotationCommitting || !waiting || !mainLinked || !mainAvailable;
+      const activeWaiting = annotations.some(item => !item.review);
+      mainSend.hidden = !activeWaiting;
+      mainSend.disabled = locked || !activeWaiting || !mainLinked || !mainAvailable;
       mainSend.title = t(!mainLinked ? '请从 DeepSeek 主对话启动此编辑器。'
         : !mainAvailable ? '请先安装 DeepSeek 主对话桥接并刷新页面。' : '发送到 DeepSeek 主对话');
     }
     $('annotations-list').replaceChildren();
-    for (const item of annotations) {
+    for (const item of all) {
       const button = document.createElement('button'); button.type = 'button';
-      button.className = 'annotation-item'; button.disabled = sending || annotationCommitting;
+      button.className = 'annotation-item'; button.disabled = locked;
       const quote = document.createElement('b'), requirement = document.createElement('span');
-      quote.textContent = '#' + item.id + ' · ' + item.original;
+      quote.textContent = '#' + item.id + ' · ' + (item.fileName ? item.fileName + ' · ' : '') + item.original;
       requirement.textContent = item.request;
       button.append(quote, requirement);
-      button.onclick = () => editAnnotation(item, button.getBoundingClientRect());
+      button.onclick = () => item.edit ? item.edit(button.getBoundingClientRect()) : editAnnotation(item, button.getBoundingClientRect());
       $('annotations-list').append(button);
-      if (item.review) {
+      if (item.review && item.doc === editor.getDoc()) {
         item.review.setVisible(editorProofread(), item.marker.find());
         if (!editorProofread()) $('annotations-list').append(item.review.root);
       }
     }
-    $('annotations-empty').hidden = !!annotations.length;
-    annotations.forEach(item => item.review?.setBusy(sending || annotationCommitting));
+    $('annotations-empty').hidden = !!all.length;
+    annotations.forEach(item => item.review?.setBusy(locked));
     paintAnnotations(annotations, editAnnotation);
   }
   function validAnnotation(item) {
@@ -606,7 +671,7 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
     return pos && editor.getDoc() === item.doc && editor.getRange(pos.from, pos.to) === item.original ? pos : null;
   }
   function saveAnnotation(close = true) {
-    if (sending || annotationCommitting || !quickInput.value.trim()) return false;
+    if (annotationBatch || sending || annotationCommitting || !quickInput.value.trim()) return false;
     const pos = validAnnotation({marker:quickMarker,doc:quickDoc,original:quickOriginal});
     if (!pos) { quickNotice(t('选区已变化，请重新选择后添加批注。'), true); return false; }
     const start = editor.indexFromPos(pos.from), end = editor.indexFromPos(pos.to);
@@ -663,21 +728,62 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
     review.style.right = '8px';
     review.style.top = box.bottom + 6 + 'px';
   });
-  function sendAnnotations(batch) {
-    if (!batch.length || sending || annotationCommitting) return;
+  function sendAnnotations(batch, owner = null) {
+    if (!batch.length || (annotationBatch && owner !== annotationBatch) || sending || annotationCommitting) return;
     if (batch.some(item => !validAnnotation(item))) {
       annotationNotice(t('批注选区已变化，未发送。请点批注检查并重新选择。'), true); return;
     }
     batch.sort((a,b) => editor.indexFromPos(a.marker.find().from) - editor.indexFromPos(b.marker.find().from));
     const question = batch.map(item => '#' + item.id + '\n' + item.request).join('\n\n');
-    return send(question, null, batch);
+    return send(question, null, batch, owner);
   }
-  $('annotations-send').onclick = () => {
+  $('annotations-send').onclick = async () => {
+    if (annotationBatch || sending || annotationCommitting || branches.loading) return;
     if (quickInput.value.trim() && !saveAnnotation()) return;
-    return sendAnnotations(annotations.filter(item => !item.review));
+    const pending = allAnnotations().filter(item => !item.review);
+    if (!pending.length) return;
+    if (pending.some(item => {
+      const pos = item.marker.find();
+      return !pos || annotatedSources.get(item.path)?.conflict || (item.doc === editor.getDoc() ? !validAnnotation(item) : item.doc.getRange(pos.from,pos.to) !== item.original);
+    })) {
+      annotationNotice(t('批注选区已变化，未发送。请点批注检查并重新选择。'), true);return;
+    }
+    if (pending.every(item => item.doc === editor.getDoc())) return sendAnnotations(pending);
+    try {
+      if (await visitAnnotationFiles(pending,sendAnnotations)) annotationNotice(t(allAnnotations().some(item => item.review)
+        ? '请逐处选择 Keep 或 Undo；也可在批注列表处理。' : '批注与修改已保存到历史。'));
+    } catch(error) { annotationNotice(error.message, true); }
   };
+  async function visitAnnotationFiles(pending, operation) {
+    const original = {doc:editor.getDoc(),path:$('filename').title}, groups = new Map();
+    for (const item of pending) {
+      if (!groups.has(item.doc)) groups.set(item.doc,{doc:item.doc,path:item.path,name:item.fileName,ids:[]});
+      groups.get(item.doc).ids.push(item.id);
+    }
+    const owner = {};annotationBatch = owner;setSending(false);
+    try {
+      const ordered = [...groups.values()].sort((a,b) => Number(b.doc === original.doc)-Number(a.doc === original.doc));
+      for (const group of ordered) {
+        if (annotationBatch !== owner) return false;
+        if (group.doc !== editor.getDoc()) {
+          const opened=await sourceFiles.open?.(group.path,owner);
+          if (annotationBatch !== owner) return false;
+          if (!opened) throw new Error(group.name + ' · ' + t('批注选区已变化，未发送。请点批注检查并重新选择。'));
+        }
+        if (annotationBatch !== owner) return false;
+        const batch = annotations.filter(item => group.ids.includes(item.id));
+        if (batch.length !== group.ids.length || !await operation(batch,owner)) return false;
+      }
+      if (annotationBatch === owner && original.doc !== editor.getDoc()) await sourceFiles.open?.(original.path,owner);
+      return annotationBatch === owner;
+    } finally {
+      if (annotationBatch === owner) {
+        annotationBatch = null;setSending(false);
+      }
+    }
+  }
   async function sendToMainChat() {
-    if (sending || annotationCommitting || !mainLinked || !mainAvailable) return;
+    if (annotationBatch || sending || annotationCommitting || !mainLinked || !mainAvailable) return;
     if (quickInput.value.trim() && !saveAnnotation()) return;
     const batch = annotations.filter(item => !item.review);
     if (!batch.length) return;
@@ -709,7 +815,7 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
     } catch (error) { annotationNotice(error.message, true); }
     finally { annotationCommitting = false; refreshAnnotations(); }
   }
-  $('annotations-stop').onclick = () => { if (annotationCommitting) return; stop(); annotationNotice(t('已停止，批注保留，可重新发送。')); };
+  $('annotations-stop').onclick = () => { if (annotationCommitting) return; stop(); annotationNotice(t('已停止，未处理的批注和修改建议已保留。')); };
   const range = () => marker?.find();
   const selectedText = () => { const pos = range(); return pos ? editor.getRange(pos.from, pos.to) : ''; };
   function message(role, text, id = null) {
@@ -766,21 +872,22 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
     try{await task;}finally{if(memoryLoading===task)memoryLoading=null;}
   }
   function setSending(value) {
-    sending = value; panel.dataset.sending = String(value); $('chat-send').disabled = value; $('chat-stop').hidden = !value;
-    const compactStatus = $('chat-compact-status');if (compactStatus) compactStatus.textContent = value ? t('Codex 正在思考…') : '';
-    $('chat-typing').hidden = !value || branches.busy;
-    $('chat-use-selection').disabled = value;
-    modelSelect.disabled = value; effortSelect.disabled = value || !modelSelect.value; configButton.disabled = value; branchConfig.disabled = value;
-    quickBrain.disabled = value;
-    quickEffort.disabled = value || !modelSelect.value;
-    styleSelect.disabled = value;
-    if (value) { quickSettings.hidePopover(); panelSettings.hidePopover(); }
-    $('chat-quick-send').disabled = value || !quickMarker;
+    sending = value;const locked = value || !!annotationBatch;
+    panel.dataset.sending = String(locked); $('chat-send').disabled = locked; $('chat-stop').hidden = !locked;
+    const compactStatus = $('chat-compact-status');if (compactStatus) compactStatus.textContent = locked ? t('Codex 正在思考…') : '';
+    $('chat-typing').hidden = !locked || branches.busy;
+    $('chat-use-selection').disabled = locked;
+    modelSelect.disabled = locked; effortSelect.disabled = locked || !modelSelect.value; configButton.disabled = locked; branchConfig.disabled = locked;
+    quickBrain.disabled = locked;
+    quickEffort.disabled = locked || !modelSelect.value;
+    styleSelect.disabled = locked;
+    if (locked) { quickSettings.hidePopover(); panelSettings.hidePopover(); }
+    $('chat-quick-send').disabled = locked || !quickMarker;
     syncQuickDirectSend();
-    $('chat-quick-delete').disabled = value;
-    quickInput.readOnly = value;
-    $('annotations-send').setAttribute('aria-busy', String(value && annotationSending));
-    $('annotations-stop').hidden = !value || !annotationSending;
+    $('chat-quick-delete').disabled = locked;
+    quickInput.readOnly = locked;
+    $('annotations-send').setAttribute('aria-busy', String(!!annotationBatch || value && annotationSending));
+    $('annotations-stop').hidden = !annotationBatch && (!value || !annotationSending);
     refreshAnnotations();
     branches.syncBusy();
     sizeQuick();
@@ -823,18 +930,20 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
   async function stop() {
     if (annotationCommitting) return;
     if (branches.busy) await branches.stop();
-    generation++; const id = job; job = null; annotationSending = false; setSending(false);
+    generation++; const id = job; job = null; annotationSending = false; annotationBatch = null;setSending(false);
     if (id) { try { await request('/chat/cancel', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); } catch(e) { notice(e.message); } }
   }
   function reset(preserveAnnotations = false) {
     endPanelResize();
-    stop();
+    if (!preserveAnnotations || !annotationBatch) stop();
     if (!preserveAnnotations) quickInput.value = '';
     quick.hidePopover();
     if (!preserveAnnotations) {
       importingStyle++; styles = [...writingStyles]; restoreDefaultStyle();
       quickMarker?.clear(); quickMarker = null; editingAnnotation = null;
-      annotations.forEach(item => { item.review?.destroy(); item.marker.clear(); }); annotations = []; annotationId = 0;
+      const pending = new Set([...annotations,...[...annotatedSources.values()].flatMap(file=>file.annotations)]);
+      pending.forEach(item => { item.review?.destroy(); item.marker.clear(); }); annotations = []; annotationId = 0;
+      annotatedSources.clear();annotationSource = null;nextAnnotationSource = null;preservingSource = false;
     }
     $('annotations-status').textContent = ''; refreshAnnotations();
     branches.reset(preserveAnnotations);
@@ -853,7 +962,7 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
     }
   });
   function openQuick(anchor) {
-    if (sending || annotationCommitting) return;
+    if (annotationBatch || sending || annotationCommitting || editor.getOption('readOnly') === 'nocursor') return;
     if (quickInput.value.trim() && !saveAnnotation(false)) { quick.showPopover(); return; }
     quickAnchor = null; quickMoved = false;
     if (!editingAnnotation) quickMarker?.clear();
@@ -878,7 +987,7 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
     button.setAttribute('aria-label', label); button.title = label + ' · Ctrl+Enter';
   }
   function syncQuickDirectSend() {
-    $('chat-quick-direct-send').disabled = sending || !quickMarker || !quickInput.value.trim();
+    $('chat-quick-direct-send').disabled = !!annotationBatch || sending || !quickMarker || !quickInput.value.trim();
   }
   function showQuick(anchor) {
     quickAnchor = null; quickMoved = false;
@@ -933,8 +1042,8 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
     event.preventDefault();
     return send(input.value, input);
   };
-  async function send(text, draftInput, batch = null) {
-    if (sending || annotationCommitting || branches.loading) return;
+  async function send(text, draftInput, batch = null, owner = null) {
+    if ((annotationBatch && owner !== annotationBatch) || sending || annotationCommitting || branches.loading) return;
     const selection = batch ? batch[0].original : selectedText(), question = (batch ? text : branches.question(text)).trim();
     if (!question) return;
     if (!selection && batch) { notice(t('选区已失效，请重新选择文本。')); return; }
@@ -942,7 +1051,7 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
     const token = ++generation, doc = editor.getDoc();
     let conversation;
     annotationSending = !!batch;
-    if (batch) annotationNotice(t('Codex 正在处理批注…'));
+    if (batch) annotationNotice(t('Codex 正在处理批注…') + (annotationBatch && annotationSource ? ' · ' + annotationSource.fileName : ''));
     clearProposal(); setSending(true); notice(t('Codex 正在思考…'));
     try {
       if(memoryRevision===null)await loadMemory();
@@ -985,10 +1094,10 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
           notice('');
         }
         messages.scrollTop = messages.scrollHeight;
-        return;
+        return true;
       }
     } catch(e) {
-      if (token === generation) { if(e.conflict)memoryRevision=null;notice(e.message); if (batch) annotationNotice(e.message, true); if(draftInput?.value==='')draftInput.value = text; }
+      if (token === generation) { if(e.conflict)memoryRevision=null;notice(e.message); if (batch) annotationNotice((annotationBatch && annotationSource ? annotationSource.fileName + ' · ' : '') + e.message, true); if(draftInput?.value==='')draftInput.value = text; }
     } finally { if (token === generation) { annotationSending = false; job = null; setSending(false); } }
   }
   function annotationEdits(batch, replacements) {
@@ -1044,11 +1153,11 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
         item.proposed = replacement;item.reviewReply = reply;
         item.review = attachProofread(editor, pos.from, pos.to, item.original, replacement, result.changes,
           async () => {
-            if (sending || annotationCommitting) throw new Error(t('正在保存，请稍后重试。'));
+            if (annotationBatch || sending || annotationCommitting) throw new Error(t('正在保存，请稍后重试。'));
             await applyAnnotations([item], [prepared], reply);
           },
           () => {
-            if (sending || annotationCommitting) return;
+            if (annotationBatch || sending || annotationCommitting) return;
             item.review.destroy(); item.marker.clear();
             annotations = annotations.filter(other => other !== item); refreshAnnotations();
             notice(t('已撤销这处建议，原文保留。'));
@@ -1114,7 +1223,7 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
     return true;
   }
   $('chat-apply').onclick = applyProposal;
-  editor.on('swapDoc', () => reset());
+  editor.on('swapDoc', () => { if (!preservingSource) reset(); });
   window.addEventListener('latex-proofread-change', refreshAnnotations);
   window.addEventListener('latex-language-change', () => {
     labelResizer();
@@ -1135,25 +1244,41 @@ export function attachSelectionChat(editor, request, paintAnnotations = () => {}
     if (job) fetch('/chat/cancel', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:job}),keepalive:true});
   });
   window.addEventListener('beforeunload', event => {
-    if (annotations.length || quickInput.value.trim()) { event.preventDefault(); event.returnValue = ''; }
+    if (annotations.length || annotatedSources.size || quickInput.value.trim()) { event.preventDefault(); event.returnValue = ''; }
   });
   restoreDefaultStyle(); refreshAnnotations();
-  return {open, openQuick, refreshAnnotations, async keepAll() {
-    if (sending || annotationCommitting) throw new Error(t('正在保存，请稍后重试。'));
-    const batch = annotations.filter(item => item.review);
+  async function keepCurrentReviews(batch) {
     annotationEdits(batch,batch.map(item=>({id:item.id,replacement:item.proposed})));
     for (let end=batch.length;end>0;end-=100) {
       const group=batch.slice(Math.max(0,end-100),end);
       await applyAnnotations(group,group.map(item=>({id:item.id,replacement:item.proposed})),
         [...new Set(group.map(item=>item.reviewReply))].filter(Boolean).join('\n\n'));
     }
+    return true;
+  }
+  return {open, openQuick, refreshAnnotations, sourceDocument, activateSource, prepareSourceSwitch, navigate:navigateAnnotation,
+    isBatchSwitch:owner => !!annotationBatch && owner === annotationBatch && !sending && !annotationCommitting && !branches.loading,
+    get allItems(){return allAnnotations();}, async keepAll() {
+    if (annotationBatch || sending || annotationCommitting) throw new Error(t('正在保存，请稍后重试。'));
+    const batch = allAnnotations().filter(item => item.review);
+    if (batch.some(item=>{
+      const pos=item.marker.find();
+      return !pos || annotatedSources.get(item.path)?.conflict || (item.doc===editor.getDoc()
+        ? !validAnnotation(item) : item.doc.getRange(pos.from,pos.to)!==item.original);
+    })) throw new Error(t('批注选区已变化，未应用任何修改。批注已保留。'));
+    if (batch.every(item=>item.doc===editor.getDoc())) return keepCurrentReviews(batch);
+    return visitAnnotationFiles(batch,keepCurrentReviews);
   }, undoAll() {
-    if (sending || annotationCommitting) throw new Error(t('正在保存，请稍后重试。'));
-    for (const item of annotations.filter(item => item.review)) {
+    if (annotationBatch || sending || annotationCommitting) throw new Error(t('正在保存，请稍后重试。'));
+    rememberSource();
+    const files=[...annotatedSources.values()];
+    for (const item of new Set([...annotations,...files.flatMap(file=>file.annotations)].filter(item=>item.review))) {
       item.review.destroy(); item.marker.clear();
     }
+    for (const file of files) file.annotations=file.annotations.filter(item=>!item.review);
     annotations = annotations.filter(item => !item.review);
     refreshAnnotations();
-  }, get busy() { return sending || annotationCommitting || branches.loading; },
-    get hasAnnotations() { return !!annotations.length || !!quickInput.value.trim() || branches.hasDrafts; }};
+    return true;
+  }, get busy() { return !!annotationBatch || sending || annotationCommitting || branches.loading; },
+    get hasAnnotations() { return !!annotations.length || !!annotatedSources.size || !!quickInput.value.trim() || branches.hasDrafts; }};
 }

@@ -189,7 +189,7 @@ Later theorem paragraph.
 \end{document}
 '''
     path.write_text(source, encoding='utf-8')
-    server = make_server(path)
+    server = make_server(path, preferences_path=Path(directory) / '.test-preferences.sqlite3')
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     base = f'http://127.0.0.1:{server.server_port}'
@@ -202,7 +202,9 @@ Later theorem paragraph.
 
     try:
         state = request('/state')
-        compiled = request('/compile', {'source':state['source'], 'version':state['version']})
+        # Unicode glyph fixtures need stable ligature extraction across local TeX fonts.
+        compiled = request('/compile', {'source':state['source'], 'version':state['version'],
+                                        'engine_choice':'xelatex', 'allow_installer':False})
         assert compiled['ok'], compiled
         result = subprocess.run(['node', '--input-type=module', '-e', NODE], cwd=Path(__file__).parent,
             input=json.dumps({'base':base, 'source':source, 'version':compiled['version'], 'pdf_revision':compiled['pdf_revision'], 'citations':compiled['citations'], 'labels':compiled['labels']}),

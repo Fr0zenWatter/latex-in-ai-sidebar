@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import threading
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 
@@ -72,12 +73,16 @@ with tempfile.TemporaryDirectory(prefix='latex project ') as directory:
         assert {file['name'] for file in current['files']} == {
             'main.tex', 'chapters/first.tex', 'chapters/deep/body.tex', 'appendices/body.tex'}
         compiled = compile_current()
+        polled = state()
+        assert polled['sync'] and polled['pdf_revision'] == compiled['pdf_revision']
+        assert polled['outline'] == compiled['outline'], 'Polling supplies the same outline as the successful compile.'
         assert compiled['labels']['appendix:body'] == '3', compiled['labels']
         pdf = server.pdf
         analysis = subprocess.run(['node', str(Path(__file__).with_name('pdf_analysis_test.mjs'))],
                                   input=json.dumps({'url':base + '/pdf', 'text':False}),
                                   text=True, encoding='utf-8', capture_output=True, check=True)
         boxes = json.loads(analysis.stdout)['boxes']
+        source_points = {}
         for file in (chapter, nested, appendix):
             current = switch(file)
             assert current['sync'] and server.pdf == pdf
@@ -85,17 +90,34 @@ with tempfile.TemporaryDirectory(prefix='latex project ') as directory:
             code, point = request('/synctex', {**mapping, 'direction':'forward', 'line':2, 'column':1})
             assert code == 200, point
             x1, y1, x2, y2 = point['rect']
+            source_points[file] = {'page':point['page'], 'x':x1+5, 'y':(y1+y2)/2}
             switch(main)
             mapping['version'] = state()['version']
             code, target = request('/synctex', {**mapping, 'direction':'backward', 'page':point['page'],
                                                'x':x1 + 5, 'y':(y1 + y2)/2})
             assert code == 200 and target['path'] == str(file) and target['line'] == 2, target
+            code, selected = request('/synctex', {**mapping, 'direction':'selection',
+                'points':[{'page':point['page'], 'x':x1 + offset, 'y':(y1+y2)/2} for offset in (4,5,6,7)]})
+            assert code == 200 and all(result.get('data', {}).get('path') == str(file)
+                                      and result['data']['line'] == 2 for result in selected['results']), selected
+            neighbor = appendix if file != appendix else chapter
+            def mislabeled_anchor(_path, _build, _boxes, query, *_context):
+                return {'path':str(neighbor if query['x'] == x1+7 else file), 'line':2, 'column':1}
+            with patch('editor.locate', side_effect=mislabeled_anchor):
+                code, selected = request('/synctex', {**mapping, 'direction':'selection',
+                    'points':[{'page':point['page'], 'x':x1+offset, 'y':(y1+y2)/2} for offset in (4,5,6,7)]})
+                assert code == 200 and all(result.get('data', {}).get('path') == str(file)
+                                          and result['data']['line'] == 2 for result in selected['results']), selected
             current = switch(file)
             mapping['version'] = current['version']
             code, ranges = request('/synctex', {**mapping, 'direction':'range', 'first':2, 'last':2})
             assert code == 200 and ranges['regions'], (str(file), ranges)
             assert ranges['lines']['2'] == ranges['regions'], 'Per-line lookup uses the active child source tag, not the main file.'
         print('PASS: nested input/include forward and inverse navigation, source ranges, stable main PDF and included labels')
+        code, selected = request('/synctex', {**mapping, 'direction':'selection',
+            'points':[source_points[chapter],source_points[appendix]]})
+        assert code == 200 and {result['data']['path'] for result in selected['results']} == {str(chapter),str(appendix)}, selected
+        print('PASS: actual compiled child rows correct a mislabeled anchor while true cross-file selections retain both sources')
 
         current = switch(appendix)
         original_main = main.read_bytes()

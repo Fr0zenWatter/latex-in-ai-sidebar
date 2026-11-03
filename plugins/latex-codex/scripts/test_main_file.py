@@ -7,7 +7,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 
-from editor import MainFileChoice, make_server, project_main_file, tex_file_inputs
+from editor import MainFileChoice, make_server, project_main_file, recorder_inputs, tex_file_inputs
 
 
 def document(*inputs):
@@ -50,6 +50,20 @@ with tempfile.TemporaryDirectory() as directory:
     ]))
     assert not standalone and inputs == ['actual'], (standalone, inputs)
     print('PASS: standalone mains, transitive/cyclic input/include, shared ownership, explicit TeX root, comments and verbatim')
+
+    build = root / '.build'
+    build.mkdir()
+    recorder = build / 'paper.fls'
+    recorder.write_text('\n'.join([f'PWD {root}', *['INPUT paper.tex'] * 50,
+                                   'INPUT "letter body.tex"', f'PWD {build}', 'INPUT ../paper.tex']), encoding='utf-8')
+    resolve = Path.resolve
+    with patch.object(Path, 'resolve', autospec=True, side_effect=resolve) as resolved:
+        assert recorder_inputs(recorder, root) == [paper, root / 'letter body.tex']
+        assert resolved.call_count == 3, 'Repeated TeX INPUT records resolve only once while retaining first-input order and PWD changes.'
+    recorder.write_text('INPUT third.tex', encoding='utf-8')
+    assert recorder_inputs(recorder, root) == [third], 'The next read must see changed recorder contents.'
+    assert recorder_inputs(build / 'missing.fls', root) == []
+    print('PASS: recorder input deduplication, quoted paths, relative/PWD resolution, changed content and missing files')
 
     with patch('editor.compiler', return_value=('pdflatex', 'unused')):
         server = make_server(paper, main_thread='', preferences_path=root / '.preferences.sqlite3')

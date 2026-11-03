@@ -27,8 +27,11 @@ with patch('editor.sys.platform', 'darwin'), patch('editor.shutil.which', return
 with patch('editor.sys.platform', 'darwin'), patch('editor.subprocess.run',
         return_value=SimpleNamespace(returncode=0, stdout='/papers with spaces/main.tex\n'.encode(), stderr=b'')) as run:
     assert choose_file(Path('/papers with spaces/main.tex')) == '/papers with spaces/main.tex'
-    assert run.call_args.args[0][-1] == str(Path('/papers with spaces/main.tex').parent)
+    assert run.call_args.args[0][-2] == str(Path('/papers with spaces/main.tex').parent)
     assert run.call_args.args[0][0] == 'osascript'
+    choose_file(Path('/papers with spaces/main.tex'), 'a "quoted" file.tex')
+    assert run.call_args.args[0][-1] == '选择拖入的原文件：a "quoted" file.tex'
+    assert 'quoted' not in run.call_args.args[0][2], 'Picker labels stay data, outside AppleScript source.'
 
 with TemporaryDirectory(prefix='latex folder ') as directory:
     folder = Path(directory) / '中文 folder'

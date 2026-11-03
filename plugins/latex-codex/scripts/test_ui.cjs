@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
+let uiFinished=false;
+process.on('beforeExit',()=>{if(!uiFinished){console.error('UI test stopped before completion.');process.exitCode=1;}});
 const zoomScript = fs.readFileSync(path.join(__dirname, 'vendor/latex-zoom.mjs'), 'utf8').replace('export function', 'function');
 const codeMirrorScript=fs.readFileSync(path.join(__dirname,'vendor/codemirror.js'),'utf8');
 const normalizeKeyMap=vm.runInNewContext(codeMirrorScript.slice(codeMirrorScript.indexOf('  function normalizeKeyName('),codeMirrorScript.indexOf('  function lookupKey('))+'\nnormalizeKeyMap;', {map:(items,fn)=>items.map(fn)});
@@ -39,6 +41,9 @@ const stored = new Map([['latex-codex-editor-mode','default']]);
 let vimEscapes=0,emacsQuits=0;
 let selected=false,commentCalls=0,cursorChanges=0;
 const chatOpened=[];
+const syncLookupResult=(body,lookup)=>body.direction==='selection'?{results:body.points.map(point=>{
+  const data=lookup(point);return data.error?data:{data};
+})}:lookup(body);
 const editor = {
   getWrapperElement:()=>element('.CodeMirror'),
   refreshes:0,
@@ -61,6 +66,7 @@ const viewer = {
   fitChanges:0,
   currentPageNumber:1,pagesCount:2,currentScale:1,pdfDocument:null,
   getPageView(index){return views[index];},update(){},
+  scrollPageIntoView({pageNumber}){this.currentPageNumber=pageNumber;},
   scaleUpdates:[],refreshes:0,
   updateScale(config){this.scaleUpdates.push(config);this.currentScale=Math.round(this.currentScale*config.scaleFactor*100)/100;},
   panBy(dx,dy){element('#preview').scrollLeft-=dx;element('#preview').scrollTop-=dy;},
@@ -82,7 +88,8 @@ const context = vm.createContext({
   englishHint:()=>null,
   attachProjectReview(){return context.bulkProjectApi={items:[],busy:false,refresh:async()=>{},clear(){}};},
   attachSourceQuotes(config){context.sourceQuotesConfig=config;return {enabled:false,refresh(){}};},
-  attachProofreadPdf(){return {update(){},invalidate(){},active:false};},paintProofreadActions(){},
+  attachProofreadPdf(config){context.proofreadPdfConfig=config;return {update(){},invalidate(){},active:false};},paintProofreadActions(){},
+  async locateProofreadSource(){return false;},
   attachProofreadNavigation(config){config.button.navigation=config;return {update(){}};},proofreadPdfPositions(){return [];},
   mountSourceWheel({button}){return {update(data){button.updates=(button.updates||0)+1;button.textContent=data.files.find(file=>file.path===data.path)?.name;button.files=data.files;button.mainFile=data.mainFile;},setDisabled(value){button.disabled=value;}};},
   pdfPageBoxes:async()=>[[0,0,600,800],[0,0,600,800]],
@@ -127,7 +134,7 @@ context.URL=URL;
 const previousBusy=vm.runInContext('({busy,syncBusy})',context);
 vm.runInContext('busy=syncBusy=false',context);
 const realOpenFile=context.openFile,dropSelections=[];
-context.openFile=async selection=>{dropSelections.push(JSON.parse(JSON.stringify(selection)));};
+context.openFile=async selection=>{dropSelections.push(selection.droppedFile?{droppedFile:selection.droppedFile}:JSON.parse(JSON.stringify(selection)));};
 const dropArea=element('main'),dropHint=element('#file-drop-hint');
 function dragEvent(files,types=['Files']){
   return {dataTransfer:{files,types},preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;}};
@@ -142,8 +149,9 @@ const mdDrop=dragEvent([{name:'notes.md'}]);
 mdDrop.dataTransfer.getData=()=> 'file:///C:/papers/notes.md';
 await dropArea.events.drop(mdDrop);
 assert.deepEqual(dropSelections.shift(),{path:'C:\\papers\\notes.md'},'A local file URI opens the original Markdown file.');
-await dropArea.events.drop(dragEvent([{name:'notes.markdown'}]));
-assert.equal(dropSelections.length,0);assert.match(element('#status').textContent,/未提供原始路径/);
+const hiddenFile={name:'notes.markdown'};
+await dropArea.events.drop(dragEvent([hiddenFile]));
+assert.equal(dropSelections.shift().droppedFile,hiddenFile,'Hidden paths use project matching or the native picker.');
 await dropArea.events.drop(dragEvent([{name:'bad.txt'}]));
 assert.equal(dropSelections.length,0);assert.match(element('#status').textContent,/一次只能拖入/);
 const textDrag=dragEvent([],['text/plain']);
@@ -731,6 +739,7 @@ preview.scrollTop=350;
 element('#pan-mode').onclick();
 context.fetch=async()=>{downloads++;return{ok:true,arrayBuffer:async()=>new ArrayBuffer(1)};};
 (async()=>{
+const initialCompile=context.compile;
 await testFileDrop();
   const folderButton=element('#open-folder'),previousFilename=element('#filename').title,previousFetch=context.fetch;
   assert.match(html,/<button id="open-folder"[^>]*disabled[^>]*data-i18n-aria-label="打开当前文件夹"/);
@@ -1227,18 +1236,18 @@ After.`;
   context.fetch=async(url,options)=>{
     assert.equal(url,'/synctex');const body=JSON.parse(options.body);
     if(body.direction==='range')return {ok:true,json:async()=>({regions:[],lines:{}})};
-    assert.equal(body.direction,'backward');assert.equal(body.version,'v');assert.equal(body.pdf_revision,'second');lookups++;
-    return {ok:true,json:async()=>({line:body.page===1?4:5,column:1})};
+    assert(['backward','selection'].includes(body.direction));assert.equal(body.version,'v');assert.equal(body.pdf_revision,'second');lookups+=body.points?.length||1;
+    return {ok:true,json:async()=>syncLookupResult(body,point=>({line:point.page===1?4:5,column:1}))};
   };
   preview.oncontextmenu(pdfClick);await element('#pdf-chat-quick-menu').onclick();
   assert.equal(chatOpened.at(-1).left,120);assert.deepEqual(JSON.parse(JSON.stringify(editor.selection)),{from:{line:3,ch:6},to:{line:4,ch:15}});
   assert.equal(lookups,2);
   const goodLookup=context.fetch;
-  context.fetch=async(url,options)=>JSON.parse(options.body).page===2?{ok:false,status:400,json:async()=>({error:'该处没有对应源码'})}:goodLookup(url,options);
+  context.fetch=async(url,options)=>({ok:true,json:async()=>syncLookupResult(JSON.parse(options.body),point=>point.page===2?{error:'该处没有对应源码'}:{line:4,column:1})});
   preview.oncontextmenu(pdfClick);await element('#pdf-chat-quick-menu').onclick();
   assert.deepEqual(JSON.parse(JSON.stringify(editor.selection)),{from:{line:3,ch:6},to:{line:4,ch:15}},'One failed endpoint must not discard a unique text match at the other anchor.');
   const openedBeforeStale=chatOpened.length;
-  context.fetch=async(url,options)=>JSON.parse(options.body).page===2?{ok:false,status:409,json:async()=>({error:'源码与 PDF 版本不同'})}:goodLookup(url,options);
+  context.fetch=async(url,options)=>url==='/state'?{ok:true,json:async()=>({})}:{ok:false,status:409,json:async()=>({error:'源码与 PDF 版本不同'})};
   preview.oncontextmenu(pdfClick);await element('#pdf-chat-quick-menu').onclick();
   assert.equal(chatOpened.length,openedBeforeStale,'Partial coordinate success must not bypass stale-version rejection.');
   context.fetch=goodLookup;
@@ -1303,7 +1312,7 @@ After.`;
   const locating=element('#pdf-chat-quick-menu').onclick();
   await new Promise(resolve=>setImmediate(resolve));
   source+=' changed during lookup';
-  pendingLookups.forEach(resolve=>resolve({ok:true,json:async()=>({line:4,column:1})}));
+  pendingLookups.forEach(resolve=>resolve({ok:true,json:async()=>({results:points.map(()=>({data:{line:4,column:1}}))})}));
   await locating;assert.equal(chatOpened.length,opened);assert.equal(editor.selection,selectedRange);
   source=paragraphs;preview.oncontextmenu(pdfClick);
   context.fetch=async()=>({ok:false,status:400,json:async()=>({error:'该处来自其他文件：included.tex'})});
@@ -1357,7 +1366,7 @@ After.`;
   source='Main source';editor.swapDoc=doc=>{editor.doc=doc;source=doc.source;};
   vm.runInContext("busy=false;syncBusy=false;conflict=false;loading=false;display({source:'Main source',version:'main-v',name:'main.tex',path:'/project/main.tex',project_root:'/project',main_file:'/project/main.tex',project_version:'project-v'});pdfVersion=version;pdfBuild='second'",context);
   const pickerButton=element('#source-file'),pollDoc=editor.getDoc(),pollKeyMap=options.keyMap;
-  const pickerState={source:'Main source',version:'main-v',name:'main.tex',path:'/project/main.tex',project_root:'/project',main_file:'/project/main.tex',project_version:'project-v',files:[{path:'/project/main.tex',name:'main.tex'},{path:'/project/new.tex',name:'new.tex'}]};
+  const pickerState={source:'Main source',version:'main-v',name:'main.tex',path:'/project/main.tex',project_root:'/project',main_file:'/project/main.tex',project_version:'project-v',sync:true,pdf_revision:'second',files:[{path:'/project/main.tex',name:'main.tex'},{path:'/project/new.tex',name:'new.tex'}]};
   context.fetch=async url=>{assert.equal(url,'/state');return {ok:true,json:async()=>pickerState};};
   await vm.runInContext('load()',context);
   assert.equal(pickerButton.files.length,2,'New sources appear even when the active source version is unchanged.');
@@ -1405,6 +1414,48 @@ After.`;
   vm.runInContext('selectionChat.hasAnnotations=true',context);
   assert.equal(await vm.runInContext("switchSource('/project/main.tex')",context),false);
   assert.equal(sourceSwitches,1,'Pending comments must never be silently discarded by navigation.');
+  context.pickerState=pickerState;vm.runInContext('selectionChat.hasAnnotations=false;display(pickerState,true)',context);
+  const crossFileBox={kind:'box',text:'Appendix paragraph.',points:[{page:1,x:10,y:10},{page:1,x:20,y:10}],
+    rectangles:[{page:1,rect:[10,5,20,15]}],source:pickerState.source,version:pickerState.version,pdf_revision:'second'};
+  context.crossFileBox=crossFileBox;vm.runInContext('pdfBoxSelection.selection=crossFileBox',context);
+  const crossFileRoutes=[],crossFileOpened=chatOpened.length;
+  const beforeCrossFileSelection=editor.selection;
+  context.fetch=async(url,options)=>{
+    assert.equal(url,'/synctex','A real cross-file selection must stop before opening any source.');
+    return {ok:true,json:async()=>({results:[{data:{path:pickerState.path,line:1,column:1}},
+      {data:{path:childState.path,line:1,column:1}}]})};
+  };
+  await vm.runInContext('askPdfSelection(crossFileBox)',context);
+  assert.match(element('#status').textContent,/选区跨越多个源码文件/);
+  assert.equal(editor.selection,beforeCrossFileSelection);assert.equal(element('#filename').title,pickerState.path);
+  assert.equal(chatOpened.length,crossFileOpened,'A true multi-file selection cannot open a composer for just one file.');
+  context.fetch=async(url,options)=>{
+    crossFileRoutes.push(url);const body=JSON.parse(options.body);
+    if(url==='/synctex'){
+      assert.equal(body.direction,'selection');assert.equal(body.points.length,2);
+      return {ok:true,json:async()=>({results:body.points.map(()=>({data:{path:childState.path,line:1,column:1}}))})};
+    }
+    assert.equal(url,'/source');return {ok:true,json:async()=>childState};
+  };
+  await vm.runInContext('askPdfSelection(crossFileBox)',context);
+  assert.deepEqual(crossFileRoutes,['/synctex','/source'],'One batch locates the selection before opening its child source, without a save or compile.');
+  assert.equal(chatOpened.length,crossFileOpened+1,'Opening another source must retain the PDF box until its comment composer opens.');
+  assert.equal(element('#filename').title,childState.path);assert.equal(editor.selection.to.ch,childState.source.length);
+  vm.runInContext('pdfBoxSelection.clear();selectionChat.hasAnnotations=true',context);
+  context.retainedAnnotationDocs=[];
+  vm.runInContext("selectionChat.prepareSourceSwitch=()=>true;selectionChat.sourceDocument=(data,create,preserve)=>{retainedAnnotationDocs.push([data.path,preserve]);return {doc:create(),conflict:false};};selectionChat.activateSource=()=>globalThis.activatedAnnotations=true",context);
+  context.fetch=async(url,options)=>{
+    assert.equal(url,'/source');const data=JSON.parse(options.body);
+    assert.equal(data.annotation_main_file,'/project/main.tex');assert.equal(data.version,'appendix-v');
+    return {ok:true,json:async()=>({...childState,path:'/project/main.tex',source:'Main source',name:'main.tex',version:'main-v',main_source:''})};
+  };
+  context.batchOwner={};vm.runInContext('selectionChat.busy=true;selectionChat.isBatchSwitch=owner=>owner===batchOwner',context);
+  assert.equal(await vm.runInContext("switchSource('/project/main.tex',false)",context),false,'Manual source switches remain blocked throughout an article Send.');
+  assert.equal(await vm.runInContext("switchSource('/project/main.tex',false,{})",context),false,'An unrelated owner cannot bypass the batch lock.');
+  assert.equal(await vm.runInContext("switchSource('/project/main.tex',false,batchOwner)",context),true);
+  vm.runInContext('selectionChat.busy=false;delete selectionChat.isBatchSwitch',context);
+  assert.deepEqual(Array.from(context.retainedAnnotationDocs[0]),['/project/main.tex',true]);assert.equal(context.activatedAnnotations,true);
+  context.childAnnotationState=childState;vm.runInContext('display(childAnnotationState,true,true);delete selectionChat.prepareSourceSwitch;delete selectionChat.sourceDocument;delete selectionChat.activateSource',context);
   vm.runInContext('selectionChat.hasAnnotations=false',context);
   context.setTimeout=fn=>{uiTimers.set(++uiTimerId,fn);return uiTimerId;};
   source='Unsaved appendix edit';const routes=[];
@@ -1624,7 +1675,7 @@ In (2), the coeﬀicients θi(ej ) can all be chosen in Z.`;
   context.boxData=boxData;context.boxConfig.onSelect(boxData);vm.runInContext('pdfBoxSelection.selection=boxData',context);
   pdfSelected=false;preview.oncontextmenu(pdfClick);assert(element('#pdf-menu').open,'Box selection has a comment menu without any native DOM Range.');
   context.fetch=async(url,options)=>{const body=JSON.parse(options.body);if(body.direction==='range')return {ok:true,json:async()=>({regions:[],lines:{}})};
-    assert.equal(body.direction,'backward');return {ok:true,json:async()=>({line:1,column:1})};};
+    assert.equal(body.direction,'selection');return {ok:true,json:async()=>syncLookupResult(body,()=>({line:1,column:1}))};};
   await element('#pdf-chat-quick-menu').onclick();
   assert.deepEqual(JSON.parse(JSON.stringify(editor.selection)),{from:{line:0,ch:2},to:{line:0,ch:18}},'Boxed prose uses the existing source/comment flow.');
   let copied;preview.events.copy({clipboardData:{setData(type,text){assert.equal(type,'text/plain');copied=text;}},preventDefault(){}});
@@ -1639,12 +1690,12 @@ In (2), the coeﬀicients θi(ej ) can all be chosen in Z.`;
   source=repeatedRows;vm.runInContext('saved='+JSON.stringify(repeatedRows),context);
   const repeatedBox={...boxData,...rowSelection,source:repeatedRows};
   context.fetch=async(url,options)=>({ok:true,json:async()=>JSON.parse(options.body).direction==='range'?
-    await indexedRows():{line:2,column:1}});
+    await indexedRows():syncLookupResult(JSON.parse(options.body),()=>({line:2,column:1}))});
   assert.equal(await context.synchronize('selection',repeatedBox),true,'The annotation entry uses compiled row disambiguation, not only the isolated matcher.');
   assert.equal(editor.selection.from.line,1);
   const beforeRetryChange=editor.selection;let finishRetry;
   context.fetch=async(url,options)=>JSON.parse(options.body).direction==='range'?new Promise(resolve=>finishRetry=resolve):
-    {ok:true,json:async()=>({line:2,column:1})};
+    {ok:true,json:async()=>syncLookupResult(JSON.parse(options.body),()=>({line:2,column:1}))};
   const delayedRetry=context.synchronize('selection',repeatedBox);
   await new Promise(resolve=>setImmediate(resolve));assert.equal(typeof finishRetry,'function');
   source+=' edited during row lookup';finishRetry({ok:true,json:indexedRows});await delayedRetry;
@@ -1666,8 +1717,8 @@ In (2), the coeﬀicients θi(ej ) can all be chosen in Z.`;
   context.fetch=async(url,options)=>{
     assert.equal(url,'/synctex','Automatically opening a comment must never submit an AI request.');
     if(JSON.parse(options.body).direction==='range')return {ok:true,json:async()=>({regions:[],lines:{}})};
-    assert.equal(JSON.parse(options.body).direction,'backward');automaticBoxLookups++;
-    return {ok:true,json:async()=>({line:1,column:1})};
+    assert.equal(JSON.parse(options.body).direction,'selection');automaticBoxLookups++;
+    return {ok:true,json:async()=>syncLookupResult(JSON.parse(options.body),()=>({line:1,column:1}))};
   };
   const beforeBoxAuto=chatOpened.length;
   autoComment.checked=false;await selectBox();
@@ -1696,7 +1747,7 @@ In (2), the coeﬀicients θi(ej ) can all be chosen in Z.`;
     const previousRange=editor.selection;
     await selectBox();
     await element('#pdf-chat-quick-menu').onclick();
-    cancel();resolveLookup({ok:true,json:async()=>({line:1,column:1})});
+    cancel();resolveLookup({ok:true,json:async()=>({results:[{data:{line:1,column:1}}]})});
     await new Promise(resolve=>setImmediate(resolve));
     assert.equal(chatOpened.length,afterBoxAuto,'Canceled, replaced, disabled or stale pending boxes cannot open late.');
     assert.equal(editor.selection,previousRange,'Invalidated automatic mapping must preserve the source selection.');
@@ -1705,7 +1756,7 @@ In (2), the coeﬀicients θi(ej ) can all be chosen in Z.`;
   autoComment.checked=false;vm.runInContext('pdfBoxSelection.clear()',context);
   context.fetch=async url=>{rejectedRoutes.push(url);return {ok:false,status:409,json:async()=>({error:'Source and PDF versions differ.'})};};
   await context.synchronize('selection',boxData);
-  assert(rejectedRoutes.length>0);assert(rejectedRoutes.every(url=>url==='/synctex'),'Rejected PDF lookups must never open an undefined source path.');
+  assert(rejectedRoutes.length>0);assert(rejectedRoutes.every(url=>url==='/synctex'||url==='/state'),'Rejected PDF lookups may refresh state but never open an undefined source path.');
   assert(element('#status').textContent.includes('Source and PDF versions differ.'),'Keep the actual stale-build error.');
   context.setTimeout=fn=>{uiTimers.set(++uiTimerId,fn);return uiTimerId;};
   source='Original with unrelated edit.';
@@ -1765,6 +1816,16 @@ In (2), the coeﬀicients θi(ej ) can all be chosen in Z.`;
   assert.equal(sourceNavigation.previous,element('#proofread-previous'));
   stored.set('latex-codex-proofread-editor','on');
   assert.deepEqual(Array.from(sourceNavigation.positions()),[900,1500], 'Source navigation includes project review and skips stale/non-review annotations.');
+  vm.runInContext("projectReview.allItems=[...projectReview.items,{path:'/project/earlier.tex',start:4,review:{},projectReview:true},{path:'/project/later.tex',start:8,review:{},projectReview:true}];projectReview.sourceOrder=['/project/earlier.tex','/project/paper.tex','/project/later.tex'];projectReview.navigate=item=>globalThis.reviewJump=item.path",context);
+  const crossFile=sourceNavigation.positions();
+  assert.deepEqual(Array.from(crossFile.filter(item=>typeof item==='object'),item=>[item.direction,item.order,item.offset]),[['above',0,4],['below',2,8]]);
+  crossFile.at(-1).navigate();assert.equal(context.reviewJump,'/project/later.tex');
+  vm.runInContext('delete projectReview.allItems;delete projectReview.sourceOrder',context);
+  vm.runInContext("selectionChat.allItems=[...localReviewItems,{path:'/project/later.tex',start:5,review:{}}];selectionChat.navigate=item=>globalThis.internalReviewJump=item.path;articleSourceOrder=['/project/paper.tex','/project/later.tex']",context);
+  const internalNavigation=sourceNavigation.positions().find(item=>typeof item==='object');
+  assert.equal(internalNavigation.direction,'below');assert.equal(internalNavigation.offset,5);
+  internalNavigation.navigate();assert.equal(context.internalReviewJump,'/project/later.tex','Internal AI reviews navigate even when external project review is off.');
+  vm.runInContext('delete selectionChat.allItems;delete selectionChat.navigate;articleSourceOrder=[]',context);
   assert.equal(sourceNavigation.top(),200);assert.equal(sourceNavigation.bottom(),800);
   sourceNavigation.scroll(876);assert.deepEqual(editor.scroll,[null,876]);
   stored.set('latex-codex-proofread-editor','off');assert.equal(sourceNavigation.positions().length,0);
@@ -1817,10 +1878,10 @@ context.bulkChatApi.busy=false;
 const bulkFind=context.bulkPending.marker.find;context.bulkPending.marker.find=()=>null;
 await bulkButton.onclick();assert.equal(bulkOrder.length,0,'Validate AI anchors before accepting external reviews.');
 assert.match(element('#status').textContent,/选区已变化/);
-context.bulkPending.marker.find=bulkFind;context.bulkProjectApi.items=[{review:{}}];
+context.bulkPending.marker.find=bulkFind;context.bulkProjectApi.items=[{projectReview:true,review:{}}];
 await bulkButton.onclick();assert.deepEqual(bulkOrder,['project','ai']);
 assert.equal(bulkButton.hidden,true);assert.equal(bulkButton.attributes['aria-busy'],'false');
-assert.equal(element('#status').textContent,'已接受当前文件的全部校对修改。');
+assert.equal(element('#status').textContent,'已接受当前文稿的全部校对修改。');
 console.log('PASS: one source-pane bulk-accept entry, shared AI/project actions, busy exclusion, stale-anchor preflight and automatic hiding');
 const bulkUndo=element('#proofread-undo-all');
 vm.runInContext('localReviewItems=[bulkPending];updateAcceptAll()',context);
@@ -1834,8 +1895,30 @@ context.bulkProjectApi.undoAll=async()=>{bulkOrder.push('undo-project');context.
 context.bulkChatApi.busy=true;await bulkUndo.onclick();assert.equal(bulkUndo.disabled,true);assert.equal(aiUndone,0);
 context.bulkChatApi.busy=false;await bulkUndo.onclick();
 assert.equal(aiUndone,1);assert.equal(bulkUndo.hidden,true);assert.equal(bulkButton.hidden,true);
-assert.equal(element('#status').textContent,'已撤销当前文件的全部待确认校对修改。');
+assert.equal(element('#status').textContent,'已撤销当前文稿的全部待确认校对修改。');
 console.log('PASS: bulk Undo shares busy protection, preserves AI suggestions on failed external saves and hides both controls after completion');
+const remoteBulkText='Remote pending',remoteBulkDoc={getRange:()=>remoteBulkText};
+context.remoteBulk={doc:remoteBulkDoc,path:'/project/child.tex',review:{},original:remoteBulkText,marker:{find:()=>({from:{line:0,ch:0},to:{line:0,ch:14}})}};
+context.bulkChatApi.allItems=[context.remoteBulk];context.bulkProjectApi.allItems=[];
+vm.runInContext('localReviewItems=[];updateAcceptAll()',context);
+assert.equal(bulkButton.hidden,false,'Bulk actions remain visible for reviews in another source.');
+let releaseBulkProject;
+context.bulkProjectApi.keepAll=()=>new Promise(resolve=>releaseBulkProject=resolve);
+context.bulkChatApi.keepAll=async()=>{context.bulkChatApi.allItems=[];return true;};
+const remoteBulkAction=bulkButton.onclick();await new Promise(resolve=>setImmediate(resolve));
+assert.equal(element('#compile').disabled,true);assert.equal(element('#history-open').disabled,true);
+assert.equal(await context.switchSource('/project/elsewhere.tex',false),false,'Manual file switches cannot race article-wide acceptance.');
+releaseBulkProject(true);await remoteBulkAction;assert.equal(bulkButton.hidden,true);
+assert.equal(element('#compile').disabled,false);
+context.bulkChatApi.allItems=[context.remoteBulk];context.bulkProjectApi.allItems=[{projectReview:true,review:{},path:'/project/child.tex'}];
+const bulkValue=editor.getValue;editor.getValue=()=> 'Unsaved draft';vm.runInContext('updateAcceptAll()',context);
+assert.equal(bulkButton.disabled,true,'Remote project changes also protect the active unsaved draft.');
+editor.getValue=bulkValue;context.bulkProjectApi.allItems=[];
+context.bulkProjectApi.keepAll=async()=>true;context.bulkChatApi.keepAll=async()=>false;
+element('#status').textContent='Stopped before remaining files';await bulkButton.onclick();
+assert.equal(element('#status').textContent,'Stopped before remaining files','A stopped article action cannot report that everything was accepted.');
+delete context.bulkChatApi.allItems;delete context.bulkProjectApi.allItems;vm.runInContext('updateAcceptAll()',context);
+console.log('PASS: article-wide bulk visibility, inactive anchors, operation locks, remote project draft protection and stopped-action status');
 const engineMenu=element('#tex-engine'),packageToggle=element('#miktex-install'),installButton=element('#compile-install');
 vm.runInContext("busy=syncBusy=conflict=sourceLocked=false;version='engine-v';saved='Compiler source'",context);
 options.readOnly=false;editor.getValue=()=> 'Compiler source';engineMenu.value='auto';packageToggle.checked=false;
@@ -1891,4 +1974,225 @@ await element('#project-form').onsubmit({preventDefault(){}});
 assert(projectDialog.open);assert.equal(projectEntry.value,'missing.tex');assert.equal(element('#project-error').textContent,'Invalid main file');
 assert.equal(element('#project-apply').disabled,false);assert.equal(projectCompiles.length,1);
 console.log('PASS: main-file-only project settings, native browse without switching, cancel/error/late-result protection and manual Apply');
+projectDialog.close();
+const droppedRequests=[],beforeDroppedSource=editor.getValue();
+context.sourceRequest=async(route,selection)=>{assert.equal(route,'/open');droppedRequests.push(JSON.parse(JSON.stringify(selection)));return {cancelled:true};};
+context.crypto=require('node:crypto').webcrypto;
+const droppedBytes=Uint8Array.from(Buffer.from('\ufeffDropped text.\r\n','utf8'));
+let finishReading;
+const readingDrop=context.openFile({droppedFile:{name:'paper.tex',size:droppedBytes.length,arrayBuffer:()=>new Promise(resolve=>finishReading=resolve)}});
+assert.equal(vm.runInContext('busy',context),true);assert.equal(options.readOnly,'nocursor');
+await element('main').events.drop({dataTransfer:{types:['Files'],files:[{name:'other.tex'}]},preventDefault(){},stopPropagation(){}});
+assert.equal(droppedRequests.length,0,'Another drop cannot race the file fingerprint read.');
+finishReading(droppedBytes.buffer);await readingDrop;
+assert.deepEqual(droppedRequests[0],{dropped_file:{name:'paper.tex',size:droppedBytes.length,
+  sha256:require('node:crypto').createHash('sha256').update(droppedBytes).digest('hex')}});
+assert.equal(editor.getValue(),beforeDroppedSource);assert.equal(vm.runInContext('busy',context),false);assert.equal(options.readOnly,false);
+context.crypto=undefined;
+await context.openFile({droppedFile:{name:'paper.tex',size:12}});
+assert.deepEqual(droppedRequests[1],{dropped_file:{name:'paper.tex'}},'Unavailable browser hashing requests a native picker rather than abandoning the drop.');
+context.crypto=require('node:crypto').webcrypto;
+await context.openFile({droppedFile:{name:'paper.tex',size:12,arrayBuffer:async()=>{throw new Error('File read blocked');}}});
+assert.deepEqual(droppedRequests[2],{dropped_file:{name:'paper.tex'}});
+assert.equal(editor.getValue(),beforeDroppedSource);assert.equal(projectCompiles.length,1,'Cancelled drops never compile or replace the current source.');
+console.log('PASS: hidden-path drops hash raw bytes locally, send metadata only, exclude concurrent drops and retain native picker fallback/drafts');
+const nativeOpened=[],nativeCalls=[],nativeDoc=editor.getDoc();
+let nativeCurrentDoc=nativeDoc;editor.getDoc=()=>nativeCurrentDoc;
+context.clearTimeout=id=>uiTimers.delete(id);
+context.openFile=async(selection={})=>nativeOpened.push(JSON.parse(JSON.stringify(selection)));
+const nativeEvent={isTrusted:true,clientX:140,clientY:190};
+vm.runInContext('nativeDropAvailable=true',context);
+let nativeStatus={status:'ready'};
+context.fetch=async(route,options)=>{
+  assert.equal(route,'/native-drop');const body=JSON.parse(options.body);nativeCalls.push(body);
+  return {ok:true,json:async()=>body.action==='arm'?{status:'ready'}:nativeStatus};
+};
+await context.startNativeDrop({...nativeEvent,isTrusted:false});assert.equal(nativeCalls.length,0);
+await context.startNativeDrop(nativeEvent);
+assert.deepEqual(nativeCalls[0].area,{x:20,y:10,width:280,height:28,scale:1});
+const nativeGesture=vm.runInContext('nativeDrag',context);
+nativeStatus={status:'dropped',files:['C:\\outside\\paper.tex']};
+vm.runInContext('busy=true',context);await uiTimers.get(nativeGesture.timer)();
+assert.equal(nativeOpened.length,0,'A completed native drop waits for a pending save/compile.');
+vm.runInContext('busy=false',context);
+await uiTimers.get(nativeGesture.timer)();
+assert.deepEqual(nativeOpened,[{path:'C:\\outside\\paper.tex'}]);assert.equal(vm.runInContext('nativeDrag',context),null);
+assert.equal(element('#file-drop-hint').hidden,true);
+await context.startNativeDrop(nativeEvent);
+const cancelledNative=vm.runInContext('nativeDrag',context);nativeStatus={status:'cancelled'};
+await context.stopNativeDrop();assert(!uiTimers.has(cancelledNative.timer));
+assert.equal(nativeCalls.at(-1).action,'cancel');assert.equal(nativeOpened.length,1);
+await context.startNativeDrop(nativeEvent);
+const staleNative=vm.runInContext('nativeDrag',context);nativeCurrentDoc={source:'Another document'};
+nativeStatus={status:'dropped',files:['C:\\outside\\other.tex']};
+await uiTimers.get(staleNative.timer)();assert.equal(nativeOpened.length,1);
+assert.match(element('#status').textContent,/重新拖入/);nativeCurrentDoc=nativeDoc;
+let finishNativeArm;
+context.fetch=async(route,options)=>{
+  const body=JSON.parse(options.body);nativeCalls.push(body);
+  if(body.action==='arm')return new Promise(resolve=>finishNativeArm=resolve);
+  return {ok:true,json:async()=>({status:'cancelled'})};
+};
+const lateArm=context.startNativeDrop(nativeEvent);await context.stopNativeDrop();
+finishNativeArm({ok:true,json:async()=>({status:'ready'})});await lateArm;
+assert.equal(nativeCalls.at(-1).action,'cancel','A late native window is cancelled after the browser already handled the drop.');
+assert.equal(nativeOpened.length,1);
+context.fetch=async()=>({ok:true,json:async()=>({status:'dropped',files:['C:\\outside\\fast.tex']})});
+element('#file-drop-hint').hidden=false;
+await context.startNativeDrop(nativeEvent);
+assert.equal(nativeOpened.at(-1).path,'C:\\outside\\fast.tex');assert.equal(element('#file-drop-hint').hidden,true,'A drop that completes before the arm response also clears its hint.');
+context.fetch=async()=>({ok:true,json:async()=>({status:'cancelled',reason:'released'})});
+await context.startNativeDrop(nativeEvent);assert.deepEqual(nativeOpened.at(-1),{},'If the native target misses the release, offer the normal picker instead of silently losing the drop.');
+context.fetch=async()=>({ok:true,json:async()=>({status:'unavailable'})});
+await context.startNativeDrop(nativeEvent);assert.equal(vm.runInContext('nativeDropAvailable',context),false);
+assert.equal(editor.getValue(),beforeDroppedSource);
+console.log('PASS: transient native drag arming, original-path delivery, hidden cleanup, cancellation, stale-document exclusion and late-arm/failure fallback');
+
+// A service restart or another tab can replace the PDF without changing source bytes.
+context.compile=initialCompile;context.synchronize=realSynchronize;editor.getDoc=()=>editor.doc;
+const syncState={path:'/sync/main.tex',name:'main.tex',main_file:'/sync/main.tex',project_root:'/sync',source:'Saved source.',
+  version:'sync-v',project_version:'sync-project',sync:true,pdf_revision:'server-build',labels:{eq:'8'},citations:{paper:'12'},outline:[]};
+context.syncState=syncState;
+function resetSync(build='old-build'){
+  source=syncState.source;editor.getValue=()=>source;
+  vm.runInContext("busy=syncBusy=loading=conflict=false;historyDialog.open=false;autoCompilePaused=false;sourceLocked=false;emacsReadOnly=false;editorMode.value='default';proofreadPdf={active:false,update(){},invalidate(){}};localReviewItems=[];selectionChat.hasAnnotations=true;display(syncState);pdfVersion=version",context);
+  context.oldSyncBuild=build;vm.runInContext('pdfBuild=oldSyncBuild',context);
+  autosave.checked=false;automatic.checked=true;
+}
+resetSync();const syncDoc=editor.getDoc(),syncCursor=cursorChanges,syncRoutes=[];
+element('#chat-input').value='Keep this conversation draft';
+context.fetch=async(url)=>{
+  syncRoutes.push(url);
+  if(url==='/state')return {ok:true,json:async()=>syncState};
+  assert(url.startsWith('/pdf?v='),'Refreshing a compiled PDF must not save or compile.');
+  return {ok:true,arrayBuffer:async()=>new ArrayBuffer(8)};
+};
+await context.load();
+assert.equal(vm.runInContext('pdfBuild',context),'server-build');assert.equal(vm.runInContext('pdfVersion',context),'sync-v');
+assert.deepEqual(syncRoutes,['/state','/pdf?v=server-build']);
+assert.equal(editor.getDoc(),syncDoc);assert.equal(cursorChanges,syncCursor);assert.equal(source,'Saved source.');
+assert.equal(element('#chat-input').value,'Keep this conversation draft');assert.equal(context.bulkChatApi.hasAnnotations,true);
+assert.equal(vm.runInContext('compiledLabels.eq',context),'8');assert.equal(vm.runInContext('compiledCitations.paper',context),'12');
+await context.load();assert.deepEqual(syncRoutes,['/state','/pdf?v=server-build','/state'],'Unchanged builds reuse the mounted PDF.');
+syncState.sync=false;syncState.pdf_revision='';
+await context.load();assert.equal(vm.runInContext('pdfVersion',context),'');assert.equal(vm.runInContext('pdfBuild',context),'server-build');
+assert.equal(vm.runInContext('normalPdfData.sync',context),false,'A restarted service invalidates the old SyncTeX mapping.');
+syncState.sync=true;syncState.pdf_revision='after-restart';await context.load();
+assert.equal(vm.runInContext('pdfBuild',context),'after-restart');
+source+=' Manual draft.';syncState.pdf_revision='another-build';const beforeDirtyRoutes=syncRoutes.length;
+await context.load();assert.equal(source,'Saved source. Manual draft.');assert.equal(editor.getDoc(),syncDoc);
+assert.equal(syncRoutes.length,beforeDirtyRoutes+1,'Polling cannot replace the PDF while the source draft is dirty.');
+assert.equal(vm.runInContext('pdfVersion',context),'');
+source=syncState.source;vm.runInContext("proofreadPdf.active=true;pdfBuild='proofread-build'",context);
+await context.load();assert.equal(vm.runInContext('pdfBuild',context),'proofread-build');
+assert.equal(vm.runInContext('normalPdfData.pdf_revision',context),'another-build','An active proofread preview retains the latest normal PDF for restoration.');
+vm.runInContext('proofreadPdf.active=false',context);await context.load();assert.equal(vm.runInContext('pdfBuild',context),'another-build');
+
+let finishPdf;syncState.pdf_revision='delayed-build';
+context.fetch=async url=>url==='/state'?{ok:true,json:async()=>syncState}:new Promise(resolve=>finishPdf=resolve);
+const delayedSync=context.load();await new Promise(resolve=>setImmediate(resolve));
+const replacementDoc={source:'Another document'};editor.doc=replacementDoc;
+vm.runInContext("version='other-version';pdfVersion='other-version'",context);
+finishPdf({ok:true,arrayBuffer:async()=>new ArrayBuffer(8)});await delayedSync;
+assert.equal(editor.getDoc(),replacementDoc);assert.equal(vm.runInContext('version',context),'other-version');
+assert.equal(vm.runInContext('pdfVersion',context),'other-version');assert.equal(vm.runInContext('pdfBuild',context),'another-build','A delayed PDF cannot overwrite a new source context.');
+
+resetSync('before-forward');syncState.pdf_revision='fresh-forward';let syncAttempts=0,stateReads=0;
+context.fetch=async(url,options)=>{
+  if(url==='/state'){stateReads++;return {ok:true,json:async()=>syncState};}
+  if(url.startsWith('/pdf?'))return {ok:true,arrayBuffer:async()=>new ArrayBuffer(8)};
+  assert.equal(url,'/synctex');const body=JSON.parse(options.body);syncAttempts++;
+  if(syncAttempts===1){assert.equal(body.pdf_revision,'before-forward');return {ok:false,status:409,json:async()=>({error:'Stale PDF'})};}
+  assert.equal(body.pdf_revision,'fresh-forward');return {ok:true,json:async()=>({page:1,rect:[0,0,10,10]})};
+};
+await context.synchronize('forward');assert.equal(syncAttempts,2);assert.equal(stateReads,1);
+assert.match(element('#status').textContent,/已定位到 PDF/);assert.equal(vm.runInContext('syncBusy',context),false);
+
+resetSync('before-backward');syncState.pdf_revision='fresh-backward';syncAttempts=stateReads=0;
+const beforeBackwardCursor=cursorChanges;
+context.fetch=async(url)=>{
+  if(url==='/state'){stateReads++;return {ok:true,json:async()=>syncState};}
+  if(url.startsWith('/pdf?'))return {ok:true,arrayBuffer:async()=>new ArrayBuffer(8)};
+  assert.equal(url,'/synctex');syncAttempts++;return {ok:false,status:409,json:async()=>({error:'Stale PDF'})};
+};
+await context.synchronize('backward',{page:1,x:1,y:1});
+assert.equal(syncAttempts,1);assert.equal(stateReads,1);assert.equal(cursorChanges,beforeBackwardCursor,'Old PDF coordinates cannot be replayed on a new PDF.');
+assert.match(element('#status').textContent,/重新点击/);assert.equal(vm.runInContext('pdfVersion',context),'sync-v');
+
+resetSync('before-repeat');syncState.pdf_revision='repeat-build';syncAttempts=stateReads=0;
+await context.synchronize('forward');assert.equal(syncAttempts,2);assert.equal(stateReads,1,'A second conflict cannot start another recovery loop.');
+assert.match(element('#status').textContent,/Stale PDF/);assert.equal(vm.runInContext('syncBusy',context),false);
+console.log('PASS: same-source PDF replacement/restart recovery, draft and proofread preservation, stale async results, one forward retry and safe inverse re-selection');
+resetSync('proofread-navigation');
+vm.runInContext('proofreadPdf.active=true;selectionChat.busy=false;acceptingAll=syncBusy=busy=conflict=false',context);
+const reviewNavigationDoc=editor.getDoc(),reviewNavigationSource=source;
+let proofreadNavigations=0;
+context.locateProofreadSource=async config=>{
+  proofreadNavigations++;assert.equal(config.viewer,viewer);assert.equal(config.preview.active,true);
+  const state=config.capture();assert.equal(state.doc,reviewNavigationDoc);assert.equal(state.source,reviewNavigationSource);
+  assert.equal(state.pdfRevision,'proofread-navigation');
+  config.focus({line:4,ch:0});return {path:state.path,line:5};
+};
+context.fetch=async()=>assert.fail('Proofread navigation must not use formal compilation or SyncTeX.');
+await context.synchronize('backward',{page:1,x:10,y:10});
+assert.equal(proofreadNavigations,1);assert.equal(editor.cursor.line,4);assert.equal(source,reviewNavigationSource);assert.equal(editor.getDoc(),reviewNavigationDoc);
+assert.match(element('#status').textContent,/已定位到源码第 5 行/);assert.equal(vm.runInContext('syncBusy',context),false);
+vm.runInContext('syncBusy=true',context);await context.synchronize('backward',{page:1,x:10,y:10});assert.equal(proofreadNavigations,1);
+vm.runInContext('syncBusy=false',context);
+context.locateProofreadSource=async()=>{throw new Error('Preview changed');};
+await context.synchronize('backward',{page:1,x:10,y:10});assert.match(element('#status').textContent,/Preview changed/);
+assert.equal(vm.runInContext('syncBusy',context),false);assert.equal(vm.runInContext('proofreadPdf.active',context),true);
+console.log('PASS: proofread double-click uses its own navigation, retains source/reviews and releases locks on stale results');
+// Exercise the real preview coordinator through the real source-switch/display path.
+const proofreadCoordinator=fs.readFileSync(path.join(__dirname,'vendor/latex-proofread-pdf.mjs'),'utf8')
+  .split('export function proofreadPdfPositions')[0].replace(/^import .*;\r?\n/gm,'').replace('export function attachProofreadPdf','function attachProofreadPdf');
+context.attachProofreadPdf=vm.runInContext(proofreadCoordinator+'\nattachProofreadPdf;',context);
+vm.runInContext(script.slice(script.indexOf('async function sourceRequest('),script.indexOf('async function switchSource(')),context);
+const reuseSourceA='old A.',reuseSourceB='old B.',reuseDocA={source:reuseSourceA},reuseDocB={source:reuseSourceB};
+const reuseItemA={id:1,path:'/project/a.tex',version:'reuse-a',source:reuseSourceA,doc:reuseDocA,start:0,end:3,
+  original:'old',proposed:'new',review:{},marker:{find:()=>({from:{line:0,ch:0},to:{line:0,ch:3}})}},
+  reuseItemB={id:2,path:'/project/b.tex',version:'reuse-b',source:reuseSourceB,doc:reuseDocB,start:0,end:3,
+    original:'old',proposed:'new',review:{},marker:{find:()=>({from:{line:0,ch:0},to:{line:0,ch:3}})}};
+source=reuseSourceA;editor.doc=reuseDocA;editor.getDoc=()=>editor.doc;
+editor.getRange=(from,to)=>source.slice(from.ch,to.ch);editor.indexFromPos=pos=>pos.ch;
+context.bulkChatApi.allItems=[reuseItemA,reuseItemB];context.bulkChatApi.busy=false;context.bulkChatApi.hasAnnotations=true;
+context.bulkChatApi.prepareSourceSwitch=()=>true;
+context.bulkChatApi.sourceDocument=data=>{
+  assert.equal(typeof data.source,'string',JSON.stringify(data));
+  context.bulkChatApi.allItems=[];context.paintPdfAnnotations([],null);
+  source=data.source;return {doc:data.path===reuseItemA.path?reuseDocA:reuseDocB};
+};
+context.bulkChatApi.activateSource=()=>{context.bulkChatApi.allItems=[reuseItemA,reuseItemB];context.bulkChatApi.refreshAnnotations();};
+context.bulkChatApi.refreshAnnotations=()=>context.paintPdfAnnotations(context.bulkChatApi.allItems,null);
+context.bulkProjectApi.items=[];context.bulkProjectApi.allItems=[];
+let refreshedAfterSourceSwitch=0;
+context.bulkProjectApi.refresh=async()=>{assert.equal(vm.runInContext('busy',context),false);refreshedAfterSourceSwitch++;};
+const reuseRoutes=[];
+context.fetch=async(route,options)=>{
+  reuseRoutes.push(route);
+  if(route==='/proofread')return {ok:true,json:async()=>({pdf_revision:'reuse-preview',proofread_version:'reuse-sync',regions:[]})};
+  assert.equal(route,'/source','Switching review files must not save or compile a normal PDF.');
+  const file=JSON.parse(options.body).path===reuseItemA.path?reuseItemA:reuseItemB;
+  return {ok:true,json:async()=>({path:file.path,name:file.path.split('/').pop(),version:file.version,source:file.source,
+    main_file:'/project/main.tex',project_root:'/project',sync:true,pdf_revision:'formal-build',files:[]})};
+};
+element('#filename').title=reuseItemA.path;
+vm.runInContext("busy=syncBusy=conflict=acceptingAll=switchingSource=false;sourceLocked=false;documentType='latex';mainFile='/project/main.tex';projectRoot='/project';version='reuse-a';saved='old A.';pdfBuild='reuse-preview';normalPdfData=null;proofreadPdf=attachProofreadPdf(proofreadPdfConfig)",context);
+uiTimers.clear();context.bulkChatApi.refreshAnnotations();
+const reuseTimers=[...uiTimers.values()];uiTimers.clear();await Promise.all(reuseTimers.map(fn=>fn()));
+assert.deepEqual(reuseRoutes,['/proofread']);
+const reusedPreview=vm.runInContext('proofreadPdf.data',context),reusedPdf=viewer.pdfDocument;
+assert.equal(await context.switchSource(reuseItemB.path),true,element('#status').textContent);
+assert.equal(await context.switchSource(reuseItemA.path),true,element('#status').textContent);
+assert.equal(vm.runInContext('proofreadPdf.data',context),reusedPreview);
+assert.equal(viewer.pdfDocument,reusedPdf);assert.equal(uiTimers.size,0);
+assert.deepEqual(reuseRoutes,['/proofread','/source','/source'],'Temporary empty comments and document swaps never rebuild the article.');
+assert.equal(refreshedAfterSourceSwitch,2);assert.equal(vm.runInContext('switchingSource',context),false);
+assert.equal(context.bulkChatApi.allItems.length,2);assert.equal(source,reuseSourceA);
+context.fetch=async route=>{assert.equal(route,'/source');return {ok:false,status:409,json:async()=>({error:'Source changed'})};};
+assert.equal(await context.switchSource(reuseItemB.path),false);
+assert.equal(vm.runInContext('switchingSource',context),false);assert.equal(vm.runInContext('sourceLocked',context),false);
+assert.equal(vm.runInContext('proofreadPdf.data',context),reusedPreview);assert.equal(uiTimers.size,0);
+console.log('PASS: real source switching retains the compiled proofread PDF across reset/activate notifications, refreshes project reviews and skips redundant compilation');
+uiFinished=true;
 })().catch(error=>{console.error(error);process.exitCode=1;});

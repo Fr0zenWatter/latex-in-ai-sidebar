@@ -1,6 +1,9 @@
 import {translations} from './latex-locales.mjs';
 
 export const english = {
+  '已同步最新 PDF，可继续定位。':'Latest PDF loaded. Navigation is ready.',
+  'PDF 已更新，请重新点击要定位的位置。':'The PDF was updated. Click the location again.',
+  '当前文件已切换，请重新拖入。':'The current file changed. Drop the file again.',
   '选择主编译文件':'Choose main compilation file',
   '当前文件被多个主文件引用，请选择本次编译使用的主文件。':'This file is included by multiple main files. Choose which one to compile.',
   '删除对话':'Delete conversation', '确认删除':'Confirm delete', '对话已删除。':'Conversation deleted.',
@@ -61,6 +64,10 @@ export const english = {
   '已接受当前文件的全部校对修改。':'Accepted all proofread changes in the current file.',
   '全部 Undo':'Undo all', '撤销当前文件的全部待确认校对修改':'Undo all pending proofread changes in the current file',
   '已撤销当前文件的全部待确认校对修改。':'Undid all pending proofread changes in the current file.',
+  '接受当前文稿的全部待确认校对修改':'Accept all pending proofread changes in this article',
+  '撤销当前文稿的全部待确认校对修改':'Undo all pending proofread changes in this article',
+  '已接受当前文稿的全部校对修改。':'Accepted all proofread changes in this article.',
+  '已撤销当前文稿的全部待确认校对修改。':'Undid all pending proofread changes in this article.',
   '请在源码逐处选择 Keep 或 Undo。':'Choose Keep or Undo for each change in the source.',
   '正在保存，请稍后重试。':'Saving. Please try again shortly.', '已撤销这处建议，原文保留。':'Suggestion undone. Original text preserved.',
   'Markdown 源码':'Markdown source', 'Markdown 预览':'Markdown preview',
@@ -117,7 +124,7 @@ export const english = {
   'PDF 批注':'PDF comment', '拖动批注框':'Move comment', '批注要求':'Comment request',
   '写下这处的修改要求…':'Describe the change here…', '保存批注 · Ctrl+Enter':'Save comment · Ctrl+Enter',
   '批注 · {count}':'Comments · {count}', '编辑批注 {number}':'Edit comment {number}',
-  '发送全部批注':'Send all comments', '待发送批注':'Pending comments',
+  '发送全部批注':'Send all comments', '发送当前文稿的全部批注':'Send all comments in this article', '发送当前文件的全部批注':'Send all comments in the current file', '待发送批注':'Pending comments',
   '选中 PDF 文字，写下要求，再点顶部 Send。':'Select PDF text, add a request, then click Send above.',
   '选区已变化，请重新选择后添加批注。':'The selection changed. Select it again to add a comment.',
   '选区已变化，请删除这条批注并重新选择。':'The selection changed. Delete this comment and select the text again.',
@@ -126,6 +133,7 @@ export const english = {
   '批注选区已变化，未发送。请点批注检查并重新选择。':'A commented selection changed. Nothing was sent. Review the comments and select again.',
   '批注草稿尚未保存，请重新打开并检查选区。':'The comment draft is unsaved. Reopen it and check the selection.',
   '已停止，批注保留，可重新发送。':'Stopped. Your comments are kept for retry.',
+  '已停止，未处理的批注和修改建议已保留。':'Stopped. Unprocessed comments and suggestions are kept.',
   'Codex 正在处理批注…':'Codex is processing comments…',
   '批注修改返回不完整，未应用。请重试。':'The comment response is incomplete. No edits were applied. Retry.',
   '批注选区已变化，未应用任何修改。批注已保留。':'A commented selection changed. No edits were applied. Your comments are kept.',

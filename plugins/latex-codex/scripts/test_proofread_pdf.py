@@ -12,7 +12,7 @@ from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 from unittest.mock import patch
 
-from editor import make_server, validate_annotation_change
+from editor import engine_flags, make_server, validate_annotation_change
 from proofread import color_preamble, document_start, emphasize_changes, proofread_source
 from project_review import review_hunks
 
@@ -169,7 +169,7 @@ if shutil.which('xelatex') and shutil.which('node'):
         source = '\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n'+old+'\n\\end{document}'
         marked, _ = proofread_source(source,[item(source,old,new)])
         (root/'preview.tex').write_text(color_preamble(marked),encoding='utf-8')
-        result = subprocess.run(['xelatex','-no-shell-escape','-halt-on-error','-interaction=nonstopmode','preview.tex'],
+        result = subprocess.run(['xelatex',*engine_flags('xelatex',False),'-no-shell-escape','-halt-on-error','-interaction=nonstopmode','preview.tex'],
                                 cwd=root,capture_output=True,timeout=45)
         assert result.returncode == 0,result.stdout.decode(errors='replace')[-2500:]
         checked = subprocess.run(['node',str(Path(__file__).with_name('pdf_analysis_test.mjs').resolve())],

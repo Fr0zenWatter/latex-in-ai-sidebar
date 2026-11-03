@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 
-from editor import make_server
+from editor import make_server, project_dependencies
 
 
 with tempfile.TemporaryDirectory() as directory:
@@ -174,6 +174,74 @@ with tempfile.TemporaryDirectory() as directory:
             assert request('/source', {'path': str(path), 'version': state['version']})[0] == 200
             no_compile.assert_not_called()
         print('PASS: current source folder, subfile switches, stale/cross-origin rejection and failure reporting without saves/compiles')
+        neighbor = path.parent / 'neighbor.tex'
+        neighbor.write_text('Neighbor source.', encoding='utf-8')
+        current = json.loads(request('/state')[1])
+        previous_sync = (server.sync_version, server.project_version, server.pdf_revision, server.page_boxes, server.selection_sync)
+        server.sync_version, server.project_version, server.pdf_revision = current['version'], current['project_version'], 'selection-pdf'
+        mapping = {'direction':'selection', 'version':current['version'], 'pdf_revision':'selection-pdf',
+                   'boxes':[[0,0,100,100]], 'points':[{'page':1, 'x':x, 'y':50} for x in range(1,5)]}
+        barrier = threading.Barrier(4)
+        def parallel_locate(_path, _build, _boxes, query, *_context):
+            assert query['direction'] == 'backward'
+            barrier.wait(2)
+            return {'path':str(path), 'line':int(query['x']), 'column':1}
+        original = path.read_bytes()
+        try:
+            with patch('editor.locate', side_effect=parallel_locate) as lookup, \
+                    patch('editor.project_dependencies', wraps=project_dependencies) as dependencies, \
+                    patch('editor.History.record_sources', side_effect=AssertionError('Position queries must not scan history.')), \
+                    patch('editor.compile_tex') as no_compile:
+                with patch('editor.history_pdf_line_index', side_effect=AssertionError('Consistent anchors need no extra index.')):
+                    code, body = request('/synctex', mapping)
+                assert code == 200, body
+                assert [result['data']['line'] for result in json.loads(body)['results']] == [1,2,3,4]
+                assert lookup.call_count == 4 and dependencies.call_count == 1, 'One batch shares validation and queries its anchors concurrently.'
+                lookup.reset_mock()
+                for invalid in ([], mapping['points'] + mapping['points'][:1], [None], 'points'):
+                    assert request('/synctex', {**mapping, 'points':invalid})[0] == 400
+                lookup.assert_not_called()
+                for stale in ({'version':'stale'}, {'pdf_revision':'stale'}):
+                    assert request('/synctex', {**mapping, **stale})[0] == 409
+                lookup.assert_not_called()
+                def partial_locate(_path, _build, _boxes, query, *_context):
+                    if query['x'] == 1:
+                        raise ValueError('No source at this anchor.')
+                    return {'path':str(path), 'line':2, 'column':1}
+                lookup.side_effect = partial_locate
+                code, body = request('/synctex', {**mapping, 'points':mapping['points'][:2]})
+                assert code == 200 and json.loads(body)['results'] == [
+                    {'error':'No source at this anchor.'}, {'data':{'path':str(path), 'line':2, 'column':1}}]
+                def mixed_locate(_path, _build, _boxes, query, *_context):
+                    return {'path':str(neighbor if query['x'] >= 4 else path), 'line':1, 'column':1}
+                lookup.side_effect = mixed_locate
+                def compiled_rows(state):
+                    return {1:{1:{(0,40,5,60) if state['entry'] == path else (30,40,40,60)}}}
+                with patch('editor.history_pdf_line_index', side_effect=compiled_rows):
+                    code, body = request('/synctex', mapping)
+                    assert code == 200 and all(result['data']['path'] == str(path) for result in json.loads(body)['results']), body
+                    code, body = request('/synctex', {**mapping, 'points':[mapping['points'][0], {'page':1,'x':35,'y':50}]})
+                    assert code == 200 and [result['data']['path'] for result in json.loads(body)['results']] == [str(path),str(neighbor)], 'Real cross-file selections retain both files.'
+                with patch('editor.history_pdf_line_index', return_value={1:{1:{(0,40,40,60)}}}):
+                    code, body = request('/synctex', mapping)
+                    assert code == 200 and json.loads(body)['results'][-1]['data']['path'] == str(neighbor), 'Overlapping compiled rows cannot justify changing a file.'
+                with patch('editor.history_pdf_line_index', return_value=None):
+                    code, body = request('/synctex', mapping)
+                    assert code == 200 and json.loads(body)['results'][-1]['data']['path'] == str(neighbor), 'Unavailable compiled evidence must retain the original conflict.'
+                lookup.side_effect = OSError('SyncTeX unavailable')
+                assert request('/synctex', {**mapping, 'points':mapping['points'][:1]})[0] == 500
+                def edit_during_lookup(*_arguments):
+                    path.write_text('External edit during selection.', encoding='utf-8')
+                    return {'path':str(path), 'line':1, 'column':1}
+                lookup.side_effect = edit_during_lookup
+                assert request('/synctex', {**mapping, 'points':mapping['points'][:1]})[0] == 409
+                no_compile.assert_not_called()
+        finally:
+            path.write_bytes(original)
+            neighbor.unlink()
+            server.sync_version, server.project_version, server.pdf_revision, server.page_boxes, server.selection_sync = previous_sync
+        print('PASS: batched concurrent PDF selection anchors, one dependency check, no history/compile work, partial misses and stale/error guards')
+        print('PASS: wrong-file outliers require unique compiled rows; real multi-file, overlapping and unsupported mappings retain conflict evidence')
         with closing(HTTPConnection(*server.server_address, timeout=3)) as connection:
             connection.request('GET', '/')
             response = connection.getresponse()
